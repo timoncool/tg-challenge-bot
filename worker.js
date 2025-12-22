@@ -614,9 +614,9 @@ async function handleMessage(update, env, config, tg, storage) {
 /poll_monthly — создать опрос месяца
 
 🚀 Запуск челленджей:
-/start_daily — запустить дневной
-/start_weekly — запустить недельный
-/start_monthly — запустить месячный
+/run_daily — запустить дневной
+/run_weekly — запустить недельный
+/run_monthly — запустить месячный
 
 🏁 Завершение:
 /finish_daily — завершить дневной
@@ -651,17 +651,17 @@ async function handleMessage(update, env, config, tg, storage) {
     }
 
     // Admin: Start challenges
-    if (command === "/start_daily" && isAdmin) {
+    if (command === "/run_daily" && isAdmin) {
       await startChallenge(env, config, tg, storage, "daily");
       await tg.sendMessage(chatId, "✅ Дневной челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (command === "/start_weekly" && isAdmin) {
+    if (command === "/run_weekly" && isAdmin) {
       await startChallenge(env, config, tg, storage, "weekly");
       await tg.sendMessage(chatId, "✅ Недельный челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (command === "/start_monthly" && isAdmin) {
+    if (command === "/run_monthly" && isAdmin) {
       await startChallenge(env, config, tg, storage, "monthly");
       await tg.sendMessage(chatId, "✅ Месячный челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
@@ -1200,7 +1200,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.7.2",
+          version: "1.7.3",
         }),
         {
           headers: { "Content-Type": "application/json" },
