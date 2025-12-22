@@ -115,7 +115,9 @@ ${username} — ${score} реакций
 Команды:
 /current — активные челленджи
 /stats — ваша статистика
-/leaderboard — топ победителей`;
+/leaderboard — топ победителей
+/suggest — предложить тему
+/suggestions — список предложений`;
   },
 };
 
@@ -654,6 +656,73 @@ class Storage {
 
   async setReactions(chatId, challengeType, challengeId, messageId, reactionsMap) {
     await this.set(this._key(chatId, "reactions", challengeType, challengeId, messageId), reactionsMap);
+  }
+
+  // ============================================
+  // SUGGESTIONS (предложения тем от пользователей)
+  // ============================================
+
+  // Получить все предложения для типа челленджа
+  async getSuggestions(chatId, type) {
+    return (await this.get(this._key(chatId, "suggestions", type))) || [];
+  }
+
+  // Добавить новое предложение
+  async addSuggestion(chatId, type, suggestion) {
+    const suggestions = await this.getSuggestions(chatId, type);
+    // Один пользователь - одно предложение на текущий цикл
+    if (suggestions.some((s) => s.userId === suggestion.userId)) {
+      return { success: false, error: "already_suggested" };
+    }
+    suggestions.push(suggestion);
+    await this.set(this._key(chatId, "suggestions", type), suggestions);
+    return { success: true };
+  }
+
+  // Обновить реакции на предложение
+  async updateSuggestionReactions(chatId, type, messageId, userId, hasReaction) {
+    const suggestions = await this.getSuggestions(chatId, type);
+    const suggestion = suggestions.find((s) => s.messageId === messageId);
+    if (!suggestion) return null;
+
+    // Инициализация если нет
+    if (!suggestion.reactions) suggestion.reactions = {};
+
+    // Обновляем реакцию пользователя
+    if (hasReaction) {
+      suggestion.reactions[String(userId)] = 1;
+    } else {
+      delete suggestion.reactions[String(userId)];
+    }
+
+    // Пересчет уникальных реакций
+    suggestion.reactionCount = Object.keys(suggestion.reactions).length;
+
+    await this.set(this._key(chatId, "suggestions", type), suggestions);
+    return suggestion;
+  }
+
+  // Получить предложения с достаточным количеством реакций
+  async getApprovedSuggestions(chatId, type, minReactions = 3) {
+    const suggestions = await this.getSuggestions(chatId, type);
+    return suggestions.filter((s) => (s.reactionCount || 0) >= minReactions);
+  }
+
+  // Очистить предложения после использования
+  async clearSuggestions(chatId, type) {
+    await this.delete(this._key(chatId, "suggestions", type));
+  }
+
+  // Найти предложение по messageId
+  async findSuggestionByMessageId(chatId, messageId) {
+    for (const type of ["daily", "weekly", "monthly"]) {
+      const suggestions = await this.getSuggestions(chatId, type);
+      const suggestion = suggestions.find((s) => s.messageId === messageId);
+      if (suggestion) {
+        return { suggestion, type };
+      }
+    }
+    return null;
   }
 }
 
@@ -1516,6 +1585,11 @@ ${modesList}
 /schedule_weekly ДЕНЬ ЧАС
 /schedule_monthly ДЕНЬ ЧАС
 
+Предложения тем (для всех)
+/suggest — предложить тему
+/suggestions — список предложений
+Темы с 3+ реакциями попадают в опрос
+
 Сообщества
 /register_community — зарегистрировать
 /list_communities — список
@@ -1780,6 +1854,168 @@ ${formatChallenge(monthly, "Месячный")}`;
       return;
     }
 
+    // ============================================
+    // ПРЕДЛОЖЕНИЯ ТЕМ (доступно всем пользователям)
+    // ============================================
+
+    // Команда /suggest или /suggest_daily, /suggest_weekly, /suggest_monthly
+    const suggestMatch = command.match(/^\/suggest(?:_(daily|weekly|monthly))?$/);
+    if (suggestMatch) {
+      // Определяем тип: из команды или из топика
+      let type = suggestMatch[1]; // daily|weekly|monthly из команды
+
+      if (!type && threadId && config) {
+        // Определяем по топику
+        if (config.topics.daily === threadId) type = "daily";
+        else if (config.topics.weekly === threadId) type = "weekly";
+        else if (config.topics.monthly === threadId) type = "monthly";
+      }
+
+      if (!type) {
+        await tg.sendMessage(
+          chatId,
+          `Укажите тип челленджа:\n/suggest_daily, /suggest_weekly или /suggest_monthly\n\nИли используйте /suggest в теме нужного челленджа.`,
+          { message_thread_id: threadId || undefined },
+        );
+        return;
+      }
+
+      // Парсинг текста предложения: всё после команды
+      const textAfterCommand = text.replace(/^\/suggest(?:_\w+)?\s*@?\w*\s*/i, "").trim();
+
+      if (!textAfterCommand) {
+        const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
+        await tg.sendMessage(
+          chatId,
+          `💡 Предложите тему для ${typeNames[type]} челленджа\n\nФормат: /suggest Название | Описание\n\nПример:\n/suggest Котики в космосе | Милые котики покоряют галактику в стиле ретро-футуризма\n\nЕсли тема наберёт 3+ реакций до начала голосования, она попадёт в следующий опрос!`,
+          { message_thread_id: threadId || undefined },
+        );
+        return;
+      }
+
+      // Парсинг: Название | Описание
+      const parts = textAfterCommand.split("|").map((p) => p.trim());
+      const title = parts[0];
+      const description = parts[1] || parts[0];
+
+      // Валидация названия
+      if (!title || title.length < 3) {
+        await tg.sendMessage(
+          chatId,
+          "Название слишком короткое. Минимум 3 символа.",
+          { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
+        );
+        return;
+      }
+
+      if (title.length > 50) {
+        await tg.sendMessage(
+          chatId,
+          "Название слишком длинное. Максимум 50 символов.",
+          { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
+        );
+        return;
+      }
+
+      // Проверяем, не предлагал ли уже
+      const suggestions = await storage.getSuggestions(chatId, type);
+      if (suggestions.some((s) => s.userId === message.from?.id)) {
+        await tg.sendMessage(
+          chatId,
+          "Вы уже предложили тему для этого цикла. Дождитесь следующего голосования.",
+          { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
+        );
+        return;
+      }
+
+      // Генерация ID
+      const suggestionId = `${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+
+      // Публикуем предложение как отдельное сообщение
+      const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
+      const authorName = message.from?.username ? `@${message.from.username}` : message.from?.first_name || "Аноним";
+      const suggestionMsg = await tg.sendMessage(
+        chatId,
+        `💡 ПРЕДЛОЖЕНИЕ ТЕМЫ (${typeNames[type]})\n\n${title}${description !== title ? `\n${description}` : ""}\n\nАвтор: ${authorName}\n\n👍 Поставьте реакцию, если хотите такую тему!\nНужно 3+ уникальных реакций для участия в голосовании.`,
+        { message_thread_id: threadId || undefined },
+      );
+
+      // Сохраняем предложение
+      const suggestion = {
+        id: suggestionId,
+        messageId: suggestionMsg.message_id,
+        userId: message.from?.id,
+        username: message.from?.username || message.from?.first_name,
+        title: title,
+        description: description,
+        createdAt: Date.now(),
+        threadId: threadId,
+        reactions: {},
+        reactionCount: 0,
+      };
+
+      await storage.addSuggestion(chatId, type, suggestion);
+
+      // Удаляем оригинальную команду (опционально, чтобы не засорять чат)
+      try {
+        await tg.request("deleteMessage", { chat_id: chatId, message_id: message.message_id });
+      } catch (e) {
+        console.log("Could not delete suggest command:", e.message);
+      }
+
+      console.log(`Suggestion created: community=${chatId}, type=${type}, id=${suggestionId}, title="${title}"`);
+      return;
+    }
+
+    // Команда /suggestions - список предложений
+    const suggestionsMatch = command.match(/^\/suggestions(?:_(daily|weekly|monthly))?$/);
+    if (suggestionsMatch) {
+      let type = suggestionsMatch[1];
+
+      if (!type && threadId && config) {
+        if (config.topics.daily === threadId) type = "daily";
+        else if (config.topics.weekly === threadId) type = "weekly";
+        else if (config.topics.monthly === threadId) type = "monthly";
+      }
+
+      if (!type) {
+        await tg.sendMessage(
+          chatId,
+          "Укажите тип: /suggestions_daily, /suggestions_weekly, /suggestions_monthly",
+          { message_thread_id: threadId || undefined },
+        );
+        return;
+      }
+
+      const suggestions = await storage.getSuggestions(chatId, type);
+      const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
+
+      if (suggestions.length === 0) {
+        await tg.sendMessage(
+          chatId,
+          `Нет предложений для ${typeNames[type]} челленджа.\n\nПредложите тему: /suggest_${type} Название | Описание`,
+          { message_thread_id: threadId || undefined },
+        );
+        return;
+      }
+
+      let msg = `💡 ПРЕДЛОЖЕНИЯ ДЛЯ ${typeNames[type].toUpperCase()} ЧЕЛЛЕНДЖА\n\n`;
+
+      // Сортируем по количеству реакций (убывание)
+      const sorted = [...suggestions].sort((a, b) => (b.reactionCount || 0) - (a.reactionCount || 0));
+
+      for (const s of sorted) {
+        const status = (s.reactionCount || 0) >= 3 ? "✅" : "⏳";
+        const authorName = s.username ? `@${s.username}` : "Аноним";
+        msg += `${status} ${s.title} — ${s.reactionCount || 0} реакций\n   ${authorName}\n\n`;
+      }
+
+      msg += `Для участия в голосовании нужно 3+ реакции.`;
+
+      await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
+      return;
+    }
+
     // Photo submission (includes photos, image documents, and links with previews)
     const hasPhoto = message.photo && message.photo.length > 0;
     const hasImageDocument = message.document?.mime_type?.startsWith("image/");
@@ -1944,6 +2180,43 @@ async function handleReaction(update, env, storage) {
       return;
     }
 
+    const userId = reaction.user?.id;
+    if (!userId) return;
+
+    // ============================================
+    // ПРОВЕРКА: это реакция на предложение темы?
+    // ============================================
+    const suggestionResult = await storage.findSuggestionByMessageId(chatId, reaction.message_id);
+    if (suggestionResult) {
+      const { suggestion, type } = suggestionResult;
+
+      // Игнорируем самореакции (автор не может голосовать за своё предложение)
+      if (userId === suggestion.userId) {
+        console.log("Suggestion reaction ignored: self-reaction", { userId, messageId: reaction.message_id });
+        return;
+      }
+
+      // Проверяем есть ли валидная реакция
+      let hasValidReaction = false;
+      for (const r of reaction.new_reaction || []) {
+        if (r.type === "emoji" && r.emoji !== EXCLUDED_EMOJI) {
+          hasValidReaction = true;
+          break;
+        } else if (r.type === "custom_emoji" || r.type === "paid") {
+          hasValidReaction = true;
+          break;
+        }
+      }
+
+      // Обновляем реакции на предложение
+      const updated = await storage.updateSuggestionReactions(chatId, type, reaction.message_id, userId, hasValidReaction);
+
+      if (updated) {
+        console.log(`Suggestion reaction: community=${chatId}, type=${type}, msg=${reaction.message_id}, user=${userId}, valid=${hasValidReaction}, totalReactions=${updated.reactionCount}`);
+      }
+      return;
+    }
+
     // Find which challenge this message belongs to by checking all active challenges
     let challengeType = null;
     let challenge = null;
@@ -1982,10 +2255,6 @@ async function handleReaction(update, env, storage) {
       }
     }
     const userScore = hasValidReaction ? 1 : 0;
-
-    // Store this user's reaction count for this message
-    const userId = reaction.user?.id;
-    if (!userId) return;
 
     // Ignore self-reactions (user reacting to their own post)
     if (submission && userId === submission.userId) {
@@ -2030,10 +2299,30 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     const topicId = config.topics[type];
     const previousThemes = await storage.getThemeHistory(chatId, type);
     const contentMode = (await storage.get(`community:${chatId}:settings:content_mode`)) || DEFAULT_CONTENT_MODE;
-    const themesRaw = await generateThemes(env.GEMINI_API_KEY, type, "ru", previousThemes, contentMode);
+
+    // ============================================
+    // ДОБАВЛЯЕМ ОДОБРЕННЫЕ ПРЕДЛОЖЕНИЯ ПОЛЬЗОВАТЕЛЕЙ
+    // ============================================
+    const approvedSuggestions = await storage.getApprovedSuggestions(chatId, type, 3);
+
+    // Формируем из предложений строки в формате "Название | Описание"
+    const suggestionThemes = approvedSuggestions.map((s) => `${s.title} | ${s.description}`);
+
+    // Генерируем AI-темы (меньше, если есть предложения от пользователей)
+    const aiThemeCount = Math.max(2, 6 - suggestionThemes.length);
+    let aiThemes = [];
+
+    if (aiThemeCount >= 2) {
+      aiThemes = await generateThemes(env.GEMINI_API_KEY, type, "ru", previousThemes, contentMode);
+      // Ограничиваем количество AI-тем
+      aiThemes = aiThemes.slice(0, aiThemeCount);
+    }
+
+    // Объединяем: сначала предложения пользователей, потом AI-темы
+    const allThemes = [...suggestionThemes, ...aiThemes].slice(0, 6);
 
     // Extract short names for poll, keep full strings for storage
-    const shortNames = themesRaw.map((t) => parseTheme(t).short);
+    const shortNames = allThemes.map((t) => parseTheme(t).short);
 
     // Validate: need at least 2 options for poll
     if (shortNames.length < 2) {
@@ -2056,9 +2345,11 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
       type,
       pollId: poll.poll.id,
       messageId: poll.message_id,
-      options: themesRaw, // Store full "short | full" strings
+      options: allThemes, // Store full "short | full" strings
       createdAt: Date.now(),
       topicThreadId: topicId,
+      // Запоминаем какие темы были из предложений пользователей
+      suggestionIds: approvedSuggestions.map((s) => s.id),
     });
 
     // Pin the poll
@@ -2068,7 +2359,12 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
       console.error("Failed to pin poll:", e.message);
     }
 
-    console.log(`Poll created and pinned: community=${chatId}, type=${type}`);
+    // Очищаем использованные предложения
+    if (approvedSuggestions.length > 0) {
+      await storage.clearSuggestions(chatId, type);
+    }
+
+    console.log(`Poll created: community=${chatId}, type=${type}, userSuggestions=${suggestionThemes.length}, aiThemes=${aiThemes.length}`);
   } catch (e) {
     console.error(`generatePoll error (${type}):`, {
       error: e.message,
