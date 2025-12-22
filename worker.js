@@ -47,35 +47,44 @@ const ru = {
     };
     return `Голосование за тему ${labels[type]} челленджа`;
   },
-  challengeAnnouncement: (type, topic, startDate, endDate, voteCount = 0) => {
+  challengeAnnouncement: (type, topicFull, startDate, endDate, voteCount = 0) => {
     const labels = {
       daily: "ЧЕЛЛЕНДЖ ДНЯ",
       weekly: "ЧЕЛЛЕНДЖ НЕДЕЛИ",
       monthly: "ЧЕЛЛЕНДЖ МЕСЯЦА",
     };
     const voteLine = voteCount > 0 ? ` (${voteCount} голосов)` : "";
-    return `${labels[type]}
-${startDate} — ${endDate}
+    // Parse "Title | Description" format
+    const parts = topicFull.split("|").map((s) => s.trim());
+    const title = parts[0] || topicFull;
+    const description = parts[1] || "";
 
-Тема: ${topic}${voteLine}
+    return `${labels[type]}
+${startDate} — ${endDate}${voteLine}
+
+${title}${description ? `\n📝 ${description}` : ""}
 
 Отправьте изображение в эту тему для участия.
 Лучшая работа определяется по реакциям.
 Реакция 🌚 не учитывается`;
   },
   // Extended winner announcement with full prompt for winners topic
-  winnerAnnouncementFull: (username, score, type, topic, topicFull) => {
+  winnerAnnouncementFull: (username, score, type, topicFull) => {
     const labels = {
       daily: "дневного",
       weekly: "недельного",
       monthly: "месячного",
     };
+    // Parse "Title | Description" format
+    const parts = topicFull.split("|").map((s) => s.trim());
+    const title = parts[0] || topicFull;
+    const description = parts[1] || "";
+
     return `🏆 Победитель ${labels[type]} челленджа
 
 ${username} — ${score} реакций
 
-Тема: ${topic}
-${topicFull !== topic ? `\n${topicFull}` : ""}`;
+${title}${description ? `\n📝 ${description}` : ""}`;
   },
   winnerAnnouncement: (username, score, type) => {
     const labels = {
@@ -426,27 +435,17 @@ class TelegramAPI {
   }
 
   async sendPoll(chatId, question, options, params = {}) {
-    // Validate poll options (max 10, each max 100 bytes)
-    if (options.length > 10) {
-      console.warn(
-        `Too many poll options (${options.length}), truncating to 10`,
-      );
-      options = options.slice(0, 10);
-    }
+    // Telegram limit: 1-100 characters per option
     options = options.map((opt) => {
-      if (new TextEncoder().encode(opt).length > 100) {
-        let truncated = opt;
-        while (new TextEncoder().encode(truncated).length > 97) {
-          truncated = truncated.slice(0, -1);
-        }
-        return truncated + "...";
+      if (opt.length > 100) {
+        return opt.substring(0, 97) + "...";
       }
       return opt;
     });
 
     return this.request("sendPoll", {
       chat_id: chatId,
-      question: question.substring(0, 300),
+      question,
       options,
       ...params,
     });
@@ -2515,7 +2514,7 @@ async function finishChallenge(env, chatId, config, tg, storage, type) {
               : `Участник #${winner.userId}`;
             await tg.sendMessage(
               chatId,
-              ru.winnerAnnouncementFull(winnerName, winner.score, type, challenge.topic, challenge.topicFull || challenge.topic),
+              ru.winnerAnnouncementFull(winnerName, winner.score, type, challenge.topicFull || challenge.topic),
               {
                 message_thread_id: config.topics.winners,
               },
@@ -2576,13 +2575,21 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
 
         // Find matching full theme from stored options
-        const matchingFull = poll.options.find(
-          (o) => parseTheme(o).short === winnerShort,
-        );
+        // Handle truncated options (100 char limit)
+        const matchingFull = poll.options.find((o) => {
+          const short = parseTheme(o).short;
+          if (short === winnerShort) return true;
+          // If winnerShort ends with "...", compare prefix
+          if (winnerShort.endsWith("...")) {
+            return short.startsWith(winnerShort.slice(0, -3));
+          }
+          return false;
+        });
         if (matchingFull) {
           const parsed = parseTheme(matchingFull);
           shortTheme = parsed.short;
-          fullTheme = parsed.full;
+          // Store the COMPLETE original string (title + description)
+          fullTheme = matchingFull;
         } else if (winnerShort) {
           shortTheme = winnerShort;
           fullTheme = winnerShort;
@@ -2593,7 +2600,8 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         if (poll.options && poll.options.length > 0) {
           const parsed = parseTheme(poll.options[0]);
           shortTheme = parsed.short;
-          fullTheme = parsed.full;
+          // Store the COMPLETE original string (title + description)
+          fullTheme = poll.options[0];
         }
       }
       await storage.deletePoll(chatId, type);
