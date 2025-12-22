@@ -585,8 +585,11 @@ async function handleMessage(update, env, config, tg, storage) {
     const text = message.text || "";
     const threadId = message.message_thread_id || 0;
 
+    // Убираем @username из команды (в группах Telegram добавляет его)
+    const command = text.split("@")[0].split(" ")[0].toLowerCase();
+
     // Commands
-    if (text.startsWith("/start") || text.startsWith("/help")) {
+    if (command === "/start" || command === "/help") {
       await tg.sendMessage(chatId, ru.helpMessage, {
         message_thread_id: threadId || undefined,
       });
@@ -596,9 +599,6 @@ async function handleMessage(update, env, config, tg, storage) {
     // ============================================
     // ADMIN COMMANDS (только для админов группы)
     // ============================================
-    // Убираем @username из команды (в группах Telegram добавляет его)
-    const command = text.split("@")[0].split(" ")[0].toLowerCase();
-
     const isAdmin = config.chatId && message.from?.id
       ? await tg.isUserAdmin(config.chatId, message.from.id)
       : false;
@@ -614,9 +614,9 @@ async function handleMessage(update, env, config, tg, storage) {
 /poll_monthly — создать опрос месяца
 
 🚀 Запуск челленджей:
-/start_daily — запустить дневной
-/start_weekly — запустить недельный
-/start_monthly — запустить месячный
+/run_daily — запустить дневной
+/run_weekly — запустить недельный
+/run_monthly — запустить месячный
 
 🏁 Завершение:
 /finish_daily — завершить дневной
@@ -651,17 +651,17 @@ async function handleMessage(update, env, config, tg, storage) {
     }
 
     // Admin: Start challenges
-    if (command === "/start_daily" && isAdmin) {
+    if (command === "/run_daily" && isAdmin) {
       await startChallenge(env, config, tg, storage, "daily");
       await tg.sendMessage(chatId, "✅ Дневной челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (command === "/start_weekly" && isAdmin) {
+    if (command === "/run_weekly" && isAdmin) {
       await startChallenge(env, config, tg, storage, "weekly");
       await tg.sendMessage(chatId, "✅ Недельный челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (command === "/start_monthly" && isAdmin) {
+    if (command === "/run_monthly" && isAdmin) {
       await startChallenge(env, config, tg, storage, "monthly");
       await tg.sendMessage(chatId, "✅ Месячный челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
@@ -1200,7 +1200,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.7.1",
+          version: "1.7.3",
         }),
         {
           headers: { "Content-Type": "application/json" },
