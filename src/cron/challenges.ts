@@ -33,9 +33,13 @@ export async function generatePoll(
   // Get the topic ID for this challenge type
   const topicId = config.topics[type];
 
-  // Generate themes using AI
+  // Get previous themes to avoid repetition
+  const previousThemes = await storage.getThemeHistory(type);
+  console.log(`Previous themes for ${type}:`, previousThemes);
+
+  // Generate themes using AI (with history to avoid duplicates)
   console.log(`Generating themes for ${type} challenge...`);
-  const themes = await ai.generateThemes(type, config.language);
+  const themes = await ai.generateThemes(type, config.language, previousThemes);
   console.log(`Generated themes:`, themes);
 
   // Send poll to the topic
@@ -195,6 +199,9 @@ async function startChallengeWithTheme(
   const activeTopics = await storage.getActiveTopics();
   activeTopics[topicId] = type;
   await storage.setActiveTopics(activeTopics);
+
+  // Save theme to history (to avoid repetition in future)
+  await storage.addThemeToHistory(type, theme);
 
   console.log(`Challenge started: ${type} #${challengeId} - "${theme}"`);
 }

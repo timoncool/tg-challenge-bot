@@ -1076,14 +1076,14 @@ async function withRetries(task, signal) {
   const INITIAL_DELAY = 50;
   let lastDelay = 50;
   async function handleError(error) {
-    let delay = false;
+    let delay2 = false;
     let strategy = "rethrow";
     if (error instanceof HttpError) {
-      delay = true;
+      delay2 = true;
       strategy = "retry";
     } else if (error instanceof GrammyError) {
       if (error.error_code >= 500) {
-        delay = true;
+        delay2 = true;
         strategy = "retry";
       } else if (error.error_code === 429) {
         const retryAfter = error.parameters.retry_after;
@@ -1091,12 +1091,12 @@ async function withRetries(task, signal) {
           await sleep(retryAfter, signal);
           lastDelay = INITIAL_DELAY;
         } else {
-          delay = true;
+          delay2 = true;
         }
         strategy = "retry";
       }
     }
-    if (delay) {
+    if (delay2) {
       if (lastDelay !== 50) {
         await sleep(lastDelay, signal);
       }
@@ -8640,96 +8640,188 @@ var Hono2 = /* @__PURE__ */ __name(class extends Hono {
 }, "Hono");
 
 // src/services/storage.ts
+var MAX_RETRIES = 3;
+var RETRY_DELAY_MS = 50;
+var delay = /* @__PURE__ */ __name((ms2) => new Promise((resolve) => setTimeout(resolve, ms2)), "delay");
 var StorageService = class {
   constructor(kv) {
     this.kv = kv;
   }
   // ============================================
+  // Safe KV Operations (with error handling)
+  // ============================================
+  async safeGet(key) {
+    try {
+      const data = await this.kv.get(key, "json");
+      return data;
+    } catch (error) {
+      console.error(`KV get error for ${key}:`, error);
+      return null;
+    }
+  }
+  async safePut(key, value) {
+    try {
+      await this.kv.put(key, value);
+      return true;
+    } catch (error) {
+      console.error(`KV put error for ${key}:`, error);
+      return false;
+    }
+  }
+  async safeDelete(key) {
+    try {
+      await this.kv.delete(key);
+      return true;
+    } catch (error) {
+      console.error(`KV delete error for ${key}:`, error);
+      return false;
+    }
+  }
+  // ============================================
   // Challenge Management
   // ============================================
   async getChallenge(type) {
-    const data = await this.kv.get(`challenge:${type}`, "json");
-    return data;
+    return this.safeGet(`challenge:${type}`);
   }
   async saveChallenge(challenge) {
-    await this.kv.put(`challenge:${challenge.type}`, JSON.stringify(challenge));
+    return this.safePut(
+      `challenge:${challenge.type}`,
+      JSON.stringify(challenge)
+    );
   }
   async getNextChallengeId(type) {
+    const now = /* @__PURE__ */ new Date();
+    const datePrefix = now.getFullYear() * 1e4 + (now.getMonth() + 1) * 100 + now.getDate();
     const key = `challenge:${type}:counter`;
-    const current = await this.kv.get(key);
-    const next = (parseInt(current || "0", 10) || 0) + 1;
-    await this.kv.put(key, String(next));
-    return next;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const current = await this.kv.get(key);
+        const currentNum = parseInt(current || "0", 10) || 0;
+        const currentDate = Math.floor(currentNum / 1e3);
+        const next = currentDate === datePrefix ? currentNum + 1 : datePrefix * 1e3 + 1;
+        await this.kv.put(key, String(next));
+        return next;
+      } catch (error) {
+        console.error(`getNextChallengeId attempt ${attempt + 1} failed:`, error);
+        if (attempt < MAX_RETRIES - 1) {
+          await delay(RETRY_DELAY_MS * (attempt + 1));
+        }
+      }
+    }
+    return Date.now();
   }
   // ============================================
   // Poll Management
   // ============================================
   async getPoll(type) {
-    const data = await this.kv.get(`poll:${type}`, "json");
-    return data;
+    return this.safeGet(`poll:${type}`);
   }
   async savePoll(poll) {
-    await this.kv.put(`poll:${poll.type}`, JSON.stringify(poll));
+    return this.safePut(`poll:${poll.type}`, JSON.stringify(poll));
   }
   async deletePoll(type) {
-    await this.kv.delete(`poll:${type}`);
+    return this.safeDelete(`poll:${type}`);
   }
   // ============================================
-  // Submissions Management
+  // Submissions Management (with retry for race conditions)
   // ============================================
   async getSubmissions(type, challengeId) {
-    const data = await this.kv.get(
-      `submissions:${type}:${challengeId}`,
-      "json"
+    const data = await this.safeGet(
+      `submissions:${type}:${challengeId}`
     );
     return data || [];
   }
   async addSubmission(type, challengeId, submission) {
-    const submissions = await this.getSubmissions(type, challengeId);
-    if (submissions.some((s2) => s2.messageId === submission.messageId)) {
-      return;
+    const key = `submissions:${type}:${challengeId}`;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const submissions = await this.getSubmissions(type, challengeId);
+        if (submissions.some((s2) => s2.messageId === submission.messageId)) {
+          return true;
+        }
+        submissions.push(submission);
+        const success = await this.safePut(key, JSON.stringify(submissions));
+        if (success) {
+          return true;
+        }
+      } catch (error) {
+        console.error(`addSubmission attempt ${attempt + 1} failed:`, error);
+      }
+      if (attempt < MAX_RETRIES - 1) {
+        await delay(RETRY_DELAY_MS * (attempt + 1));
+      }
     }
-    submissions.push(submission);
-    await this.kv.put(
-      `submissions:${type}:${challengeId}`,
-      JSON.stringify(submissions)
-    );
+    console.error(`addSubmission failed after ${MAX_RETRIES} attempts`);
+    return false;
   }
   async updateSubmissionScore(type, challengeId, messageId, score) {
-    const submissions = await this.getSubmissions(type, challengeId);
-    const submission = submissions.find((s2) => s2.messageId === messageId);
-    if (submission) {
-      submission.score = score;
-      await this.kv.put(
-        `submissions:${type}:${challengeId}`,
-        JSON.stringify(submissions)
-      );
+    const key = `submissions:${type}:${challengeId}`;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const submissions = await this.getSubmissions(type, challengeId);
+        const submission = submissions.find((s2) => s2.messageId === messageId);
+        if (!submission) {
+          return false;
+        }
+        if (submission.score === score) {
+          return true;
+        }
+        submission.score = score;
+        const success = await this.safePut(key, JSON.stringify(submissions));
+        if (success) {
+          return true;
+        }
+      } catch (error) {
+        console.error(`updateSubmissionScore attempt ${attempt + 1} failed:`, error);
+      }
+      if (attempt < MAX_RETRIES - 1) {
+        await delay(RETRY_DELAY_MS * (attempt + 1));
+      }
     }
+    console.error(`updateSubmissionScore failed after ${MAX_RETRIES} attempts`);
+    return false;
   }
   async clearSubmissions(type, challengeId) {
-    await this.kv.delete(`submissions:${type}:${challengeId}`);
+    return this.safeDelete(`submissions:${type}:${challengeId}`);
   }
   // ============================================
-  // Leaderboard Management
+  // Leaderboard Management (with retry for race conditions)
   // ============================================
   async getLeaderboard(type) {
-    const data = await this.kv.get(`leaderboard:${type}`, "json");
+    const data = await this.safeGet(
+      `leaderboard:${type}`
+    );
     const map = data || {};
     return Object.values(map).sort((a, b) => b.wins - a.wins);
   }
   async addWin(type, userId, username) {
-    const data = await this.kv.get(`leaderboard:${type}`, "json");
-    const map = data || {};
-    const key = String(userId);
-    if (!map[key]) {
-      map[key] = { userId, username, wins: 0 };
+    const key = `leaderboard:${type}`;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const data = await this.safeGet(key);
+        const map = data || {};
+        const userKey = String(userId);
+        if (!map[userKey]) {
+          map[userKey] = { userId, username, wins: 0 };
+        }
+        map[userKey].wins += 1;
+        map[userKey].lastWin = Date.now();
+        if (username) {
+          map[userKey].username = username;
+        }
+        const success = await this.safePut(key, JSON.stringify(map));
+        if (success) {
+          return true;
+        }
+      } catch (error) {
+        console.error(`addWin attempt ${attempt + 1} failed:`, error);
+      }
+      if (attempt < MAX_RETRIES - 1) {
+        await delay(RETRY_DELAY_MS * (attempt + 1));
+      }
     }
-    map[key].wins += 1;
-    map[key].lastWin = Date.now();
-    if (username) {
-      map[key].username = username;
-    }
-    await this.kv.put(`leaderboard:${type}`, JSON.stringify(map));
+    console.error(`addWin failed after ${MAX_RETRIES} attempts`);
+    return false;
   }
   async getUserStats(type, userId) {
     const leaderboard = await this.getLeaderboard(type);
@@ -8743,15 +8835,31 @@ var StorageService = class {
   // Active Topics Tracking
   // ============================================
   async getActiveTopics() {
-    const data = await this.kv.get("active_topics", "json");
+    const data = await this.safeGet(
+      "active_topics"
+    );
     return data || {};
   }
   async setActiveTopics(topics) {
-    await this.kv.put("active_topics", JSON.stringify(topics));
+    return this.safePut("active_topics", JSON.stringify(topics));
   }
   async isActiveTopic(threadId) {
     const topics = await this.getActiveTopics();
     return topics[threadId] || null;
+  }
+  // ============================================
+  // Theme History (to avoid repetition)
+  // ============================================
+  MAX_THEME_HISTORY = 10;
+  async getThemeHistory(type) {
+    const data = await this.safeGet(`theme_history:${type}`);
+    return data || [];
+  }
+  async addThemeToHistory(type, theme) {
+    const history = await this.getThemeHistory(type);
+    history.unshift(theme);
+    const trimmed = history.slice(0, this.MAX_THEME_HISTORY);
+    return this.safePut(`theme_history:${type}`, JSON.stringify(trimmed));
   }
 };
 __name(StorageService, "StorageService");
@@ -9093,12 +9201,19 @@ var AIService = class {
   constructor(apiKey) {
     this.apiKey = apiKey;
   }
-  async generateThemes(type, language = "ru") {
+  async generateThemes(type, language = "ru", previousThemes = []) {
     const complexity = {
       daily: language === "ru" ? "\u043F\u0440\u043E\u0441\u0442\u044B\u0435, \u0437\u0430\u0431\u0430\u0432\u043D\u044B\u0435, \u043C\u043E\u0436\u043D\u043E \u0441\u0434\u0435\u043B\u0430\u0442\u044C \u0437\u0430 5-10 \u043C\u0438\u043D\u0443\u0442 \u0433\u0435\u043D\u0435\u0440\u0430\u0446\u0438\u0438" : "simple, fun, can be done in 5-10 minutes of generation",
       weekly: language === "ru" ? "\u0438\u043D\u0442\u0435\u0440\u0435\u0441\u043D\u044B\u0435, \u0442\u0440\u0435\u0431\u0443\u044E\u0449\u0438\u0435 \u043A\u0440\u0435\u0430\u0442\u0438\u0432\u0430 \u0438 \u044D\u043A\u0441\u043F\u0435\u0440\u0438\u043C\u0435\u043D\u0442\u043E\u0432 \u0441\u043E \u0441\u0442\u0438\u043B\u044F\u043C\u0438" : "interesting, requiring creativity and style experimentation",
       monthly: language === "ru" ? "\u0441\u043B\u043E\u0436\u043D\u044B\u0435, \u0430\u043C\u0431\u0438\u0446\u0438\u043E\u0437\u043D\u044B\u0435, \u043D\u0430\u0441\u0442\u043E\u044F\u0449\u0438\u0439 \u0432\u044B\u0437\u043E\u0432 \u0434\u043B\u044F \u043C\u0430\u0441\u0442\u0435\u0440\u0441\u0442\u0432\u0430" : "complex, ambitious, a real challenge for mastery"
     };
+    const exclusionNote = previousThemes.length > 0 ? language === "ru" ? `
+
+\u0412\u0410\u0416\u041D\u041E: \u041D\u0415 \u043F\u0440\u0435\u0434\u043B\u0430\u0433\u0430\u0439 \u0442\u0435\u043C\u044B \u043F\u043E\u0445\u043E\u0436\u0438\u0435 \u043D\u0430 \u044D\u0442\u0438 (\u0443\u0436\u0435 \u0438\u0441\u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u043D\u043D\u044B\u0435):
+${previousThemes.map((t, i) => `- ${t}`).join("\n")}` : `
+
+IMPORTANT: DO NOT suggest themes similar to these (already used):
+${previousThemes.map((t, i) => `- ${t}`).join("\n")}` : "";
     const prompt = language === "ru" ? `\u0422\u044B \u043F\u043E\u043C\u043E\u0433\u0430\u0435\u0448\u044C \u0441\u043E\u043E\u0431\u0449\u0435\u0441\u0442\u0432\u0443 \u043D\u0435\u0439\u0440\u043E-\u0430\u0440\u0442 \u0433\u0435\u043D\u0435\u0440\u0430\u0446\u0438\u0438 (Midjourney, Stable Diffusion, DALL-E, Flux \u0438 \u0442.\u0434.).
 
 \u041F\u0440\u0438\u0434\u0443\u043C\u0430\u0439 4 \u0443\u043D\u0438\u043A\u0430\u043B\u044C\u043D\u044B\u0445 \u0442\u0435\u043C\u044B \u0434\u043B\u044F ${type === "daily" ? "\u0435\u0436\u0435\u0434\u043D\u0435\u0432\u043D\u043E\u0433\u043E" : type === "weekly" ? "\u0435\u0436\u0435\u043D\u0435\u0434\u0435\u043B\u044C\u043D\u043E\u0433\u043E" : "\u0435\u0436\u0435\u043C\u0435\u0441\u044F\u0447\u043D\u043E\u0433\u043E"} \u0447\u0435\u043B\u043B\u0435\u043D\u0434\u0436\u0430.
@@ -9110,7 +9225,7 @@ var AIService = class {
 - \u0412\u0434\u043E\u0445\u043D\u043E\u0432\u043B\u044F\u044E\u0449\u0438\u043C\u0438 \u0434\u043B\u044F AI-\u0430\u0440\u0442\u0430
 - \u0420\u0430\u0437\u043D\u043E\u043E\u0431\u0440\u0430\u0437\u043D\u044B\u043C\u0438 \u043F\u043E \u0441\u0442\u0438\u043B\u044F\u043C \u0438 \u0441\u044E\u0436\u0435\u0442\u0430\u043C
 - \u041D\u0430 \u0440\u0443\u0441\u0441\u043A\u043E\u043C \u044F\u0437\u044B\u043A\u0435
-- \u0411\u0435\u0437 \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u0438 \u0438 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u0438\u0439
+- \u0411\u0435\u0437 \u043D\u0443\u043C\u0435\u0440\u0430\u0446\u0438\u0438 \u0438 \u043F\u043E\u044F\u0441\u043D\u0435\u043D\u0438\u0439${exclusionNote}
 
 \u041E\u0442\u0432\u0435\u0442\u044C \u0422\u041E\u041B\u042C\u041A\u041E \u0441\u043F\u0438\u0441\u043A\u043E\u043C \u0438\u0437 4 \u0442\u0435\u043C, \u043F\u043E \u043E\u0434\u043D\u043E\u0439 \u043D\u0430 \u0441\u0442\u0440\u043E\u043A\u0443.` : `You help an AI art generation community (Midjourney, Stable Diffusion, DALL-E, Flux, etc.).
 
@@ -9123,7 +9238,7 @@ Requirements:
 - Inspiring for AI art
 - Diverse in styles and subjects
 - In English
-- No numbering or explanations
+- No numbering or explanations${exclusionNote}
 
 Reply with ONLY a list of 4 themes, one per line.`;
     try {
@@ -9223,8 +9338,10 @@ async function generatePoll(bot, env, config2, type) {
     return;
   }
   const topicId = config2.topics[type];
+  const previousThemes = await storage.getThemeHistory(type);
+  console.log(`Previous themes for ${type}:`, previousThemes);
   console.log(`Generating themes for ${type} challenge...`);
-  const themes = await ai.generateThemes(type, config2.language);
+  const themes = await ai.generateThemes(type, config2.language, previousThemes);
   console.log(`Generated themes:`, themes);
   let pollMessage;
   try {
@@ -9333,6 +9450,7 @@ async function startChallengeWithTheme(bot, env, config2, type, theme) {
   const activeTopics = await storage.getActiveTopics();
   activeTopics[topicId] = type;
   await storage.setActiveTopics(activeTopics);
+  await storage.addThemeToHistory(type, theme);
   console.log(`Challenge started: ${type} #${challengeId} - "${theme}"`);
 }
 __name(startChallengeWithTheme, "startChallengeWithTheme");
