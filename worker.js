@@ -6,6 +6,15 @@
 // Эмодзи-исключение (негативная реакция)
 const EXCLUDED_EMOJI = "🌚";
 
+// Russian pluralization helper
+function pluralize(n, one, few, many) {
+  const mod10 = Math.abs(n) % 10;
+  const mod100 = Math.abs(n) % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
+}
+
 // ============================================
 // ЛОКАЛИЗАЦИЯ
 // ============================================
@@ -572,14 +581,18 @@ async function handleMessage(update, env, config, tg, storage) {
       const userId = message.from?.id;
       if (!userId) return;
 
-      const daily = await storage.getUserStats("daily", userId);
-      const weekly = await storage.getUserStats("weekly", userId);
-      const monthly = await storage.getUserStats("monthly", userId);
+      // Parallel KV reads for better performance
+      const [daily, weekly, monthly] = await Promise.all([
+        storage.getUserStats("daily", userId),
+        storage.getUserStats("weekly", userId),
+        storage.getUserStats("monthly", userId),
+      ]);
       const total = daily.wins + weekly.wins + monthly.wins;
 
+      const winsWord = pluralize(total, "победа", "победы", "побед");
       await tg.sendMessage(
         chatId,
-        `📊 Ваша статистика:\n\n🏆 Всего побед: ${total}\n\n📅 Дневные: ${daily.wins} (место #${daily.rank})\n📆 Недельные: ${weekly.wins} (место #${weekly.rank})\n📆 Месячные: ${monthly.wins} (место #${monthly.rank})`,
+        `📊 Ваша статистика:\n\n🏆 Всего ${winsWord}: ${total}\n\n📅 Дневные: ${daily.wins} (место #${daily.rank})\n📆 Недельные: ${weekly.wins} (место #${weekly.rank})\n📆 Месячные: ${monthly.wins} (место #${monthly.rank})`,
         { message_thread_id: threadId || undefined },
       );
       return;
@@ -638,9 +651,12 @@ async function handleMessage(update, env, config, tg, storage) {
     }
 
     if (text.startsWith("/current")) {
-      const daily = await storage.getChallenge("daily");
-      const weekly = await storage.getChallenge("weekly");
-      const monthly = await storage.getChallenge("monthly");
+      // Parallel KV reads for better performance
+      const [daily, weekly, monthly] = await Promise.all([
+        storage.getChallenge("daily"),
+        storage.getChallenge("weekly"),
+        storage.getChallenge("monthly"),
+      ]);
 
       const format = (c, type) => {
         if (!c || c.status !== "active")
@@ -649,7 +665,8 @@ async function handleMessage(update, env, config, tg, storage) {
           0,
           Math.floor((c.endsAt - Date.now()) / 3600000),
         );
-        return `${ru.challengeTypes[type]}:\n   🎨 "${c.topic}"\n   ⏰ Осталось: ${hours} ч.`;
+        const hoursWord = pluralize(hours, "час", "часа", "часов");
+        return `${ru.challengeTypes[type]}:\n   🎨 "${c.topic}"\n   ⏰ Осталось: ${hours} ${hoursWord}`;
       };
 
       await tg.sendMessage(
@@ -753,11 +770,16 @@ async function handleReactionCount(update, env, config, storage) {
       }
     }
 
-    for (const type of ["daily", "weekly", "monthly"]) {
-      const challenge = await storage.getChallenge(type);
-      if (challenge?.status === "active") {
+    // FIX: Only update score for the challenge that owns this message
+    // Use thread ID to determine which challenge type this belongs to
+    const threadId = reaction.message_thread_id;
+    const challengeType = await storage.isActiveTopic(threadId);
+
+    if (challengeType) {
+      const challenge = await storage.getChallenge(challengeType);
+      if (challenge?.status === "active" && Date.now() < challenge.endsAt) {
         await storage.updateSubmissionScore(
-          type,
+          challengeType,
           challenge.id,
           reaction.message_id,
           score,
@@ -1037,7 +1059,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.1.0",
+          version: "1.3.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
@@ -1088,23 +1110,31 @@ export default {
 
     // Info (protected with ADMIN_SECRET)
     if (url.pathname === "/info") {
-      const authHeader = request.headers.get("Authorization");
-      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
+      try {
+        const authHeader = request.headers.get("Authorization");
+        if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        const config = getConfig(env);
+        return new Response(
+          JSON.stringify({
+            configured: !!env.BOT_TOKEN,
+            chat_id: config.chatId,
+            topics: config.topics,
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      } catch (e) {
+        console.error("Info error:", e);
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
           headers: { "Content-Type": "application/json" },
         });
       }
-
-      const config = getConfig(env);
-      return new Response(
-        JSON.stringify({
-          configured: !!env.BOT_TOKEN,
-          chat_id: config.chatId,
-          topics: config.topics,
-        }),
-        { headers: { "Content-Type": "application/json" } },
-      );
     }
 
     // Webhook
@@ -1121,6 +1151,19 @@ export default {
 
       try {
         const update = await request.json();
+
+        // Webhook deduplication - prevent processing duplicate updates
+        if (update.update_id) {
+          const dedupKey = `webhook:processed:${update.update_id}`;
+          const alreadyProcessed = await env.CHALLENGE_KV.get(dedupKey);
+          if (alreadyProcessed) {
+            console.log(`Skipping duplicate update ${update.update_id}`);
+            return new Response("OK");
+          }
+          // Mark as processed (TTL: 1 hour)
+          await env.CHALLENGE_KV.put(dedupKey, "1", { expirationTtl: 3600 });
+        }
+
         const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
