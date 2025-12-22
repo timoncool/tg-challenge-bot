@@ -435,24 +435,9 @@ class TelegramAPI {
   }
 
   async sendPoll(chatId, question, options, params = {}) {
-    // Validate poll options (max 10, each max 100 characters)
-    if (options.length > 10) {
-      console.warn(
-        `Too many poll options (${options.length}), truncating to 10`,
-      );
-      options = options.slice(0, 10);
-    }
-    // Telegram limit is 100 characters (not bytes!)
-    options = options.map((opt) => {
-      if (opt.length > 100) {
-        return opt.substring(0, 97) + "...";
-      }
-      return opt;
-    });
-
     return this.request("sendPoll", {
       chat_id: chatId,
-      question: question.substring(0, 300),
+      question,
       options,
       ...params,
     });
