@@ -489,10 +489,13 @@ async function generateThemes(apiKey, type, language = "ru") {
 
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: { temperature: 1.0, maxOutputTokens: 500 },
@@ -660,7 +663,7 @@ async function handleMessage(update, env, config, tg, storage) {
 
       const format = (c, type) => {
         if (!c || c.status !== "active")
-          return `${ru.challengeTypes[type]}: Нет активного`;
+          return `${ru.challengeTypes[type]}: Нет активного челленджа`;
         const hours = Math.max(
           0,
           Math.floor((c.endsAt - Date.now()) / 3600000),
@@ -1059,7 +1062,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.3.0",
+          version: "1.4.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
