@@ -435,6 +435,14 @@ class TelegramAPI {
   }
 
   async sendPoll(chatId, question, options, params = {}) {
+    // Telegram limit: 1-100 characters per option
+    options = options.map((opt) => {
+      if (opt.length > 100) {
+        return opt.substring(0, 97) + "...";
+      }
+      return opt;
+    });
+
     return this.request("sendPoll", {
       chat_id: chatId,
       question,
@@ -2567,9 +2575,16 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
 
         // Find matching full theme from stored options
-        const matchingFull = poll.options.find(
-          (o) => parseTheme(o).short === winnerShort,
-        );
+        // Handle truncated options (100 char limit)
+        const matchingFull = poll.options.find((o) => {
+          const short = parseTheme(o).short;
+          if (short === winnerShort) return true;
+          // If winnerShort ends with "...", compare prefix
+          if (winnerShort.endsWith("...")) {
+            return short.startsWith(winnerShort.slice(0, -3));
+          }
+          return false;
+        });
         if (matchingFull) {
           const parsed = parseTheme(matchingFull);
           shortTheme = parsed.short;
