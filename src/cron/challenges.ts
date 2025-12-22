@@ -39,16 +39,22 @@ export async function generatePoll(
   console.log(`Generated themes:`, themes);
 
   // Send poll to the topic
-  const pollMessage = await bot.api.sendPoll(
-    config.chatId,
-    l.pollQuestion(type),
-    themes,
-    {
-      message_thread_id: topicId || undefined,
-      is_anonymous: false,
-      allows_multiple_answers: false,
-    }
-  );
+  let pollMessage;
+  try {
+    pollMessage = await bot.api.sendPoll(
+      config.chatId,
+      l.pollQuestion(type),
+      themes,
+      {
+        message_thread_id: topicId || undefined,
+        is_anonymous: false,
+        allows_multiple_answers: false,
+      }
+    );
+  } catch (error) {
+    console.error(`Failed to send poll for ${type}:`, error);
+    return; // Can't create poll, abort
+  }
 
   // Save poll info
   await storage.savePoll({
@@ -168,15 +174,19 @@ async function startChallengeWithTheme(
   };
 
   // Send announcement
-  const announcement = await bot.api.sendMessage(
-    config.chatId,
-    l.challengeAnnouncement(type, theme, endTimeStr),
-    {
-      message_thread_id: topicId || undefined,
-    }
-  );
-
-  challenge.announcementMessageId = announcement.message_id;
+  try {
+    const announcement = await bot.api.sendMessage(
+      config.chatId,
+      l.challengeAnnouncement(type, theme, endTimeStr),
+      {
+        message_thread_id: topicId || undefined,
+      }
+    );
+    challenge.announcementMessageId = announcement.message_id;
+  } catch (error) {
+    console.error(`Failed to send challenge announcement for ${type}:`, error);
+    // Continue without announcement - challenge will still work
+  }
 
   // Save challenge
   await storage.saveChallenge(challenge);
@@ -215,9 +225,13 @@ export async function finishChallenge(
 
   if (submissions.length === 0) {
     // No submissions - just announce
-    await bot.api.sendMessage(config.chatId, l.noSubmissions, {
-      message_thread_id: challenge.topicThreadId || undefined,
-    });
+    try {
+      await bot.api.sendMessage(config.chatId, l.noSubmissions, {
+        message_thread_id: challenge.topicThreadId || undefined,
+      });
+    } catch (error) {
+      console.error(`Failed to send 'no submissions' message:`, error);
+    }
 
     // Mark challenge as finished
     challenge.status = "finished";
@@ -242,14 +256,19 @@ export async function finishChallenge(
     ? `@${winner.username}`
     : `User #${winner.userId}`;
 
-  await bot.api.sendMessage(
-    config.chatId,
-    l.winnerAnnouncement(winnerName, winner.score, type),
-    {
-      message_thread_id: challenge.topicThreadId || undefined,
-      reply_to_message_id: winner.messageId,
-    }
-  );
+  try {
+    await bot.api.sendMessage(
+      config.chatId,
+      l.winnerAnnouncement(winnerName, winner.score, type),
+      {
+        message_thread_id: challenge.topicThreadId || undefined,
+        reply_to_message_id: winner.messageId,
+      }
+    );
+  } catch (error) {
+    console.error(`Failed to announce winner for ${type}:`, error);
+    // Continue with leaderboard update anyway
+  }
 
   // Forward winning submission to Winners topic
   if (config.topics.winners) {

@@ -18,6 +18,8 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@grammyjs/auto-retry": "^2.0.2",
+    "@grammyjs/ratelimiter": "^1.2.1",
     "grammy": "^1.38.4",
     "hono": "^4.6.0"
   },
