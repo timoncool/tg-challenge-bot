@@ -625,6 +625,7 @@ async function handleMessage(update, env, config, tg, storage) {
 
 📈 Статус:
 /status — текущее состояние всех челленджей
+/cs — статистика текущих челленджей (работы + баллы)
 /test_ai — проверить работу Gemini API`,
         { message_thread_id: threadId || undefined }
       );
@@ -716,6 +717,41 @@ ${formatChallenge(weekly, "• Недельный")}
 ${formatChallenge(monthly, "• Месячный")}`;
 
       await tg.sendMessage(chatId, statusMsg, { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Current challenge stats
+    if ((command === "/challenge_stats" || command === "/cs") && isAdmin) {
+      const [daily, weekly, monthly] = await Promise.all([
+        storage.getChallenge("daily"),
+        storage.getChallenge("weekly"),
+        storage.getChallenge("monthly"),
+      ]);
+
+      const formatStats = async (challenge, name) => {
+        if (!challenge || challenge.status !== "active") {
+          return `${name}: нет активного`;
+        }
+        const submissions = await storage.getSubmissions(challenge.type, challenge.id);
+        if (submissions.length === 0) {
+          return `${name}: 0 работ`;
+        }
+        const sorted = [...submissions].sort((a, b) => b.score - a.score);
+        const top = sorted.slice(0, 5).map((s, i) =>
+          `   ${i + 1}. @${s.username || s.userId} — ${s.score} ❤️`
+        ).join("\n");
+        return `${name}: ${submissions.length} работ\n${top}`;
+      };
+
+      const [dailyStats, weeklyStats, monthlyStats] = await Promise.all([
+        formatStats(daily, "🌅 Дневной"),
+        formatStats(weekly, "📅 Недельный"),
+        formatStats(monthly, "📆 Месячный"),
+      ]);
+
+      await tg.sendMessage(chatId, `📊 СТАТИСТИКА ЧЕЛЛЕНДЖЕЙ\n\n${dailyStats}\n\n${weeklyStats}\n\n${monthlyStats}`, {
+        message_thread_id: threadId || undefined,
+      });
       return;
     }
 
@@ -1269,7 +1305,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.8.1",
+          version: "1.8.2",
         }),
         {
           headers: { "Content-Type": "application/json" },
