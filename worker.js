@@ -580,6 +580,127 @@ async function handleMessage(update, env, config, tg, storage) {
       return;
     }
 
+    // ============================================
+    // ADMIN COMMANDS (только для админа)
+    // ============================================
+    const adminId = parseInt(env.ADMIN_USER_ID, 10) || 0;
+    const isAdmin = adminId && message.from?.id === adminId;
+
+    if (text === "/admin" && isAdmin) {
+      await tg.sendMessage(
+        chatId,
+        `🔧 АДМИН-ПАНЕЛЬ
+
+📊 Опросы:
+/poll_daily — создать опрос дня
+/poll_weekly — создать опрос недели
+/poll_monthly — создать опрос месяца
+
+🚀 Запуск челленджей:
+/start_daily — запустить дневной
+/start_weekly — запустить недельный
+/start_monthly — запустить месячный
+
+🏁 Завершение:
+/finish_daily — завершить дневной
+/finish_weekly — завершить недельный
+/finish_monthly — завершить месячный
+
+📈 Статус:
+/status — текущее состояние всех челленджей`,
+        { message_thread_id: threadId || undefined }
+      );
+      return;
+    }
+
+    // Admin: Create polls
+    if (text === "/poll_daily" && isAdmin) {
+      await storage.deletePoll("daily");
+      await generatePoll(env, config, tg, storage, "daily");
+      await tg.sendMessage(chatId, "✅ Опрос дня создан!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/poll_weekly" && isAdmin) {
+      await storage.deletePoll("weekly");
+      await generatePoll(env, config, tg, storage, "weekly");
+      await tg.sendMessage(chatId, "✅ Опрос недели создан!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/poll_monthly" && isAdmin) {
+      await storage.deletePoll("monthly");
+      await generatePoll(env, config, tg, storage, "monthly");
+      await tg.sendMessage(chatId, "✅ Опрос месяца создан!", { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Start challenges
+    if (text === "/start_daily" && isAdmin) {
+      await startChallenge(env, config, tg, storage, "daily");
+      await tg.sendMessage(chatId, "✅ Дневной челлендж запущен!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/start_weekly" && isAdmin) {
+      await startChallenge(env, config, tg, storage, "weekly");
+      await tg.sendMessage(chatId, "✅ Недельный челлендж запущен!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/start_monthly" && isAdmin) {
+      await startChallenge(env, config, tg, storage, "monthly");
+      await tg.sendMessage(chatId, "✅ Месячный челлендж запущен!", { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Finish challenges
+    if (text === "/finish_daily" && isAdmin) {
+      await finishChallenge(env, config, tg, storage, "daily");
+      await tg.sendMessage(chatId, "✅ Дневной челлендж завершён!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/finish_weekly" && isAdmin) {
+      await finishChallenge(env, config, tg, storage, "weekly");
+      await tg.sendMessage(chatId, "✅ Недельный челлендж завершён!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/finish_monthly" && isAdmin) {
+      await finishChallenge(env, config, tg, storage, "monthly");
+      await tg.sendMessage(chatId, "✅ Месячный челлендж завершён!", { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Status
+    if (text === "/status" && isAdmin) {
+      const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly] = await Promise.all([
+        storage.getChallenge("daily"),
+        storage.getChallenge("weekly"),
+        storage.getChallenge("monthly"),
+        storage.getPoll("daily"),
+        storage.getPoll("weekly"),
+        storage.getPoll("monthly"),
+      ]);
+
+      const formatChallenge = (c, name) => {
+        if (!c) return `${name}: ❌ нет`;
+        const status = c.status === "active" ? "🟢 активен" : "⚪ завершён";
+        const hours = c.status === "active" ? Math.max(0, Math.floor((c.endsAt - Date.now()) / 3600000)) : 0;
+        return `${name}: ${status}\n   Тема: "${c.topic}"\n   ${c.status === "active" ? `Осталось: ${hours}ч` : ""}`;
+      };
+
+      const statusMsg = `📊 СТАТУС СИСТЕМЫ
+
+🗳️ Опросы:
+• Дневной: ${pollDaily ? "✅ есть" : "❌ нет"}
+• Недельный: ${pollWeekly ? "✅ есть" : "❌ нет"}
+• Месячный: ${pollMonthly ? "✅ есть" : "❌ нет"}
+
+🎯 Челленджи:
+${formatChallenge(daily, "• Дневной")}
+${formatChallenge(weekly, "• Недельный")}
+${formatChallenge(monthly, "• Месячный")}`;
+
+      await tg.sendMessage(chatId, statusMsg, { message_thread_id: threadId || undefined });
+      return;
+    }
+
     if (text.startsWith("/stats")) {
       const userId = message.from?.id;
       if (!userId) return;
@@ -1062,7 +1183,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.5.0",
+          version: "1.6.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
