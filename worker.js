@@ -114,6 +114,21 @@ function getConfig(env) {
   };
 }
 
+// Get config with KV overrides for topics
+async function getConfigWithTopics(env, storage) {
+  const base = getConfig(env);
+  const kvTopics = await storage.get("settings:topics");
+  if (kvTopics) {
+    base.topics = {
+      daily: kvTopics.daily || base.topics.daily,
+      weekly: kvTopics.weekly || base.topics.weekly,
+      monthly: kvTopics.monthly || base.topics.monthly,
+      winners: kvTopics.winners || base.topics.winners,
+    };
+  }
+  return base;
+}
+
 // ============================================
 // TELEGRAM API
 // ============================================
@@ -501,6 +516,8 @@ async function generateThemes(apiKey, type, language = "ru") {
   const prompt = prompts[type];
 
   try {
+    console.log("Gemini API request starting...", { type, hasApiKey: !!apiKey, keyLength: apiKey?.length });
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
       {
@@ -516,8 +533,28 @@ async function generateThemes(apiKey, type, language = "ru") {
       },
     );
 
+    console.log("Gemini API response status:", response.status, response.statusText);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Gemini API error response:", { status: response.status, body: errorText });
+      throw new Error(`API error: ${response.status} - ${errorText}`);
+    }
+
     const data = await response.json();
+    console.log("Gemini API response data:", JSON.stringify(data).substring(0, 500));
+
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    if (!text) {
+      console.error("Gemini API empty response:", {
+        hasCandiates: !!data.candidates,
+        candidatesLength: data.candidates?.length,
+        error: data.error,
+        promptFeedback: data.promptFeedback
+      });
+    }
+
     // Parse lines in format "Short | Full"
     const themes = text
       .split("\n")
@@ -525,9 +562,13 @@ async function generateThemes(apiKey, type, language = "ru") {
       .filter((l) => l.includes("|") && l.length > 5)
       .slice(0, 6);
 
+    console.log("Gemini parsed themes:", themes.length);
+
     if (themes.length >= 6) return themes;
+
+    console.warn("Gemini returned less than 6 themes, using fallback", { themesCount: themes.length });
   } catch (e) {
-    console.error("AI error:", e);
+    console.error("Gemini AI error:", { message: e.message, stack: e.stack });
   }
 
   // Fallback themes in format "Short | Full"
@@ -603,6 +644,75 @@ async function handleMessage(update, env, config, tg, storage) {
       ? await tg.isUserAdmin(config.chatId, message.from.id)
       : false;
 
+    // Get topic ID - для настройки
+    if (command === "/topic_id" && isAdmin) {
+      const topicInfo = threadId
+        ? `📍 ID этой темы: \`${threadId}\`\n\nИли используй команды:\n/set_daily — назначить для дневных\n/set_weekly — для недельных\n/set_monthly — для месячных\n/set_winners — для победителей`
+        : "⚠️ Это общий чат, не тема форума. Напиши эту команду внутри темы.";
+      await tg.sendMessage(chatId, topicInfo, {
+        message_thread_id: threadId || undefined,
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    // Set topic commands
+    if (command === "/set_daily" && isAdmin) {
+      if (!threadId) {
+        await tg.sendMessage(chatId, "⚠️ Напиши эту команду внутри темы форума!", { message_thread_id: undefined });
+        return;
+      }
+      const kvTopics = (await storage.get("settings:topics")) || {};
+      kvTopics.daily = threadId;
+      await storage.set("settings:topics", kvTopics);
+      await tg.sendMessage(chatId, `✅ Эта тема назначена для ДНЕВНЫХ челленджей (ID: ${threadId})`, {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    if (command === "/set_weekly" && isAdmin) {
+      if (!threadId) {
+        await tg.sendMessage(chatId, "⚠️ Напиши эту команду внутри темы форума!", { message_thread_id: undefined });
+        return;
+      }
+      const kvTopics = (await storage.get("settings:topics")) || {};
+      kvTopics.weekly = threadId;
+      await storage.set("settings:topics", kvTopics);
+      await tg.sendMessage(chatId, `✅ Эта тема назначена для НЕДЕЛЬНЫХ челленджей (ID: ${threadId})`, {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    if (command === "/set_monthly" && isAdmin) {
+      if (!threadId) {
+        await tg.sendMessage(chatId, "⚠️ Напиши эту команду внутри темы форума!", { message_thread_id: undefined });
+        return;
+      }
+      const kvTopics = (await storage.get("settings:topics")) || {};
+      kvTopics.monthly = threadId;
+      await storage.set("settings:topics", kvTopics);
+      await tg.sendMessage(chatId, `✅ Эта тема назначена для МЕСЯЧНЫХ челленджей (ID: ${threadId})`, {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    if (command === "/set_winners" && isAdmin) {
+      if (!threadId) {
+        await tg.sendMessage(chatId, "⚠️ Напиши эту команду внутри темы форума!", { message_thread_id: undefined });
+        return;
+      }
+      const kvTopics = (await storage.get("settings:topics")) || {};
+      kvTopics.winners = threadId;
+      await storage.set("settings:topics", kvTopics);
+      await tg.sendMessage(chatId, `✅ Эта тема назначена для ПОБЕДИТЕЛЕЙ (ID: ${threadId})`, {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
     if (command === "/admin" && isAdmin) {
       await tg.sendMessage(
         chatId,
@@ -626,7 +736,14 @@ async function handleMessage(update, env, config, tg, storage) {
 📈 Статус:
 /status — текущее состояние всех челленджей
 /cs daily|weekly|monthly — статистика конкретного челленджа
-/test_ai — проверить работу Gemini API`,
+/test_ai — проверить работу Gemini API
+
+⚙️ Настройка тем:
+/set_daily — назначить тему для дневных
+/set_weekly — назначить тему для недельных
+/set_monthly — назначить тему для месячных
+/set_winners — назначить тему для победителей
+/topic_id — узнать ID текущей темы`,
         { message_thread_id: threadId || undefined }
       );
       return;
@@ -768,13 +885,42 @@ ${formatChallenge(monthly, "• Месячный")}`;
     if (command === "/test_ai" && isAdmin) {
       await tg.sendMessage(chatId, "⏳ Тестирую Gemini API...", { message_thread_id: threadId || undefined });
       try {
-        const themes = await generateThemes(env.GEMINI_API_KEY, "daily");
-        const isGenerated = themes[0] !== "Кот-астронавт | Пушистый кот в скафандре чинит космический корабль среди звёзд";
-        const status = isGenerated ? "✅ AI работает!" : "⚠️ Используются заглушки (AI не ответил)";
-        const themesPreview = themes.slice(0, 3).map((t, i) => `${i + 1}. ${t}`).join("\n");
-        await tg.sendMessage(chatId, `${status}\n\nПримеры тем:\n${themesPreview}`, { message_thread_id: threadId || undefined });
+        // Direct API call to see raw response
+        const testPrompt = "Придумай 3 темы для арт-челленджа. Формат: Название | Описание";
+        const apiKey = env.GEMINI_API_KEY;
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey,
+            },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: testPrompt }] }],
+              generationConfig: { temperature: 1.0, maxOutputTokens: 300 },
+            }),
+          },
+        );
+
+        const status = response.status;
+        const data = await response.json();
+
+        let msg = `📡 API Status: ${status}\n\n`;
+
+        if (data.error) {
+          msg += `❌ Ошибка: ${data.error.message || JSON.stringify(data.error)}`;
+        } else if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+          const text = data.candidates[0].content.parts[0].text;
+          msg += `✅ AI ответил:\n\n${text.substring(0, 500)}`;
+        } else {
+          msg += `⚠️ Пустой ответ:\n${JSON.stringify(data).substring(0, 400)}`;
+        }
+
+        await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
       } catch (e) {
-        await tg.sendMessage(chatId, `❌ Ошибка AI: ${e.message}`, { message_thread_id: threadId || undefined });
+        await tg.sendMessage(chatId, `❌ Ошибка: ${e.message}`, { message_thread_id: threadId || undefined });
       }
       return;
     }
@@ -1314,7 +1460,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.8.3",
+          version: "1.9.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
@@ -1386,9 +1532,9 @@ export default {
       }
 
       try {
-        const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
 
         // Delete existing poll if any
         await storage.deletePoll(type);
@@ -1424,9 +1570,9 @@ export default {
       }
 
       try {
-        const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
 
         await startChallenge(env, config, tg, storage, type);
 
@@ -1460,9 +1606,9 @@ export default {
       }
 
       try {
-        const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
 
         await finishChallenge(env, config, tg, storage, type);
 
@@ -1525,7 +1671,8 @@ export default {
           });
         }
 
-        const config = getConfig(env);
+        const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
         return new Response(
           JSON.stringify({
             configured: !!env.BOT_TOKEN,
@@ -1570,9 +1717,9 @@ export default {
           await env.CHALLENGE_KV.put(dedupKey, "1", { expirationTtl: 3600 });
         }
 
-        const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
 
         if (update.message) {
           await handleMessage(update, env, config, tg, storage);
@@ -1601,9 +1748,9 @@ export default {
         return;
       }
 
-      const config = getConfig(env);
       const tg = new TelegramAPI(env.BOT_TOKEN);
       const storage = new Storage(env.CHALLENGE_KV);
+      const config = await getConfigWithTopics(env, storage);
 
       await handleCron(env, config, tg, storage, event.cron);
     } catch (e) {
