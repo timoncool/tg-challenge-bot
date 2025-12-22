@@ -33,15 +33,16 @@ const ru = {
     };
     return `🗳️ Голосуем за тему ${labels[type]} челленджа!`;
   },
-  challengeAnnouncement: (type, topic, endTime) => {
+  challengeAnnouncement: (type, topic, endTime, voteCount = 0) => {
     const labels = {
       daily: "🎯 ЧЕЛЛЕНДЖ ДНЯ",
       weekly: "🎯 ЧЕЛЛЕНДЖ НЕДЕЛИ",
       monthly: "🎯 ЧЕЛЛЕНДЖ МЕСЯЦА",
     };
+    const voteLine = voteCount > 0 ? `\n🗳 Голосов за тему: ${voteCount}` : "";
     return `${labels[type]}
 
-🎨 Тема: ${topic}
+🎨 Тема: ${topic}${voteLine}
 
 ⏰ До: ${endTime}
 
@@ -273,6 +274,21 @@ class TelegramAPI {
     } catch {
       return false;
     }
+  }
+
+  async pinChatMessage(chatId, messageId, disableNotification = true) {
+    return this.request("pinChatMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+      disable_notification: disableNotification,
+    });
+  }
+
+  async unpinChatMessage(chatId, messageId) {
+    return this.request("unpinChatMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
   }
 
   async setWebhook(url, secret = null) {
@@ -528,7 +544,7 @@ async function generateThemes(apiKey, type, language = "ru") {
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 1.0, maxOutputTokens: 500 },
+          generationConfig: { temperature: 1.0, maxOutputTokens: 1000 },
         }),
       },
     );
@@ -1147,15 +1163,34 @@ async function handleReaction(update, env, config, storage) {
   try {
     const reaction = update.message_reaction;
     if (!reaction) return;
-    if (reaction.chat.id !== config.chatId) return;
+
+    console.log("Reaction received:", JSON.stringify({
+      chat_id: reaction.chat.id,
+      message_id: reaction.message_id,
+      thread_id: reaction.message_thread_id,
+      user_id: reaction.user?.id,
+      new_reaction: reaction.new_reaction,
+      old_reaction: reaction.old_reaction,
+    }));
+
+    if (reaction.chat.id !== config.chatId) {
+      console.log("Reaction ignored: wrong chat", { got: reaction.chat.id, expected: config.chatId });
+      return;
+    }
 
     const threadId = reaction.message_thread_id;
     const challengeType = await storage.isActiveTopic(threadId);
 
-    if (!challengeType) return;
+    if (!challengeType) {
+      console.log("Reaction ignored: not an active topic", { threadId });
+      return;
+    }
 
     const challenge = await storage.getChallenge(challengeType);
-    if (!challenge?.status === "active" || Date.now() >= challenge.endsAt) return;
+    if (challenge?.status !== "active" || Date.now() >= challenge.endsAt) {
+      console.log("Reaction ignored: challenge not active", { status: challenge?.status, endsAt: challenge?.endsAt });
+      return;
+    }
 
     // Count valid reactions in new_reaction
     let userScore = 0;
@@ -1186,7 +1221,7 @@ async function handleReaction(update, env, config, storage) {
       totalScore,
     );
 
-    console.log(`Reaction update: msg=${reaction.message_id}, user=${userId}, score=${totalScore}`);
+    console.log(`Reaction scored: msg=${reaction.message_id}, user=${userId}, userScore=${userScore}, totalScore=${totalScore}`);
   } catch (e) {
     console.error("handleReaction error:", {
       error: e.message,
@@ -1236,7 +1271,14 @@ async function generatePoll(env, config, tg, storage, type) {
       topicThreadId: topicId,
     });
 
-    console.log(`Poll created: ${type}`);
+    // Pin the poll
+    try {
+      await tg.pinChatMessage(config.chatId, poll.message_id);
+    } catch (e) {
+      console.error("Failed to pin poll:", e.message);
+    }
+
+    console.log(`Poll created and pinned: ${type}`);
   } catch (e) {
     console.error(`generatePoll error (${type}):`, {
       error: e.message,
@@ -1249,6 +1291,15 @@ async function finishChallenge(env, config, tg, storage, type) {
   try {
     const challenge = await storage.getChallenge(type);
     if (!challenge || challenge.status !== "active") return;
+
+    // Unpin the announcement
+    if (challenge.announcementMessageId) {
+      try {
+        await tg.unpinChatMessage(config.chatId, challenge.announcementMessageId);
+      } catch (e) {
+        console.error("Failed to unpin announcement:", e.message);
+      }
+    }
 
     const submissions = await storage.getSubmissions(type, challenge.id);
 
@@ -1317,6 +1368,7 @@ async function startChallenge(env, config, tg, storage, type) {
     let shortTheme = "Свободная тема";
     let fullTheme =
       "Свободная тема — создайте что угодно, дайте волю фантазии!";
+    let voteCount = 0;
 
     if (poll) {
       try {
@@ -1330,6 +1382,14 @@ async function startChallenge(env, config, tg, storage, type) {
             maxVotes = opt.voter_count;
             winnerShort = opt.text;
           }
+        }
+        voteCount = maxVotes;
+
+        // Unpin the poll
+        try {
+          await tg.unpinChatMessage(config.chatId, poll.messageId);
+        } catch (e) {
+          console.error("Failed to unpin poll:", e.message);
         }
 
         // Find matching full theme from stored options
@@ -1375,14 +1435,21 @@ async function startChallenge(env, config, tg, storage, type) {
 
     const challengeId = await storage.getNextChallengeId(type);
 
-    // Use full description in announcement
+    // Use full description in announcement with vote count
     const announcement = await tg.sendMessage(
       config.chatId,
-      ru.challengeAnnouncement(type, fullTheme, endTimeStr),
+      ru.challengeAnnouncement(type, fullTheme, endTimeStr, voteCount),
       {
         message_thread_id: topicId || undefined,
       },
     );
+
+    // Pin the announcement
+    try {
+      await tg.pinChatMessage(config.chatId, announcement.message_id);
+    } catch (e) {
+      console.error("Failed to pin announcement:", e.message);
+    }
 
     // Store short theme for leaderboard/stats display
     await storage.saveChallenge({
@@ -1401,7 +1468,7 @@ async function startChallenge(env, config, tg, storage, type) {
     activeTopics[topicId] = type;
     await storage.setActiveTopics(activeTopics);
 
-    console.log(`Challenge started: ${type} #${challengeId} - "${shortTheme}"`);
+    console.log(`Challenge started: ${type} #${challengeId} - "${shortTheme}" (${voteCount} votes)`);
   } catch (e) {
     console.error(`startChallenge error (${type}):`, {
       error: e.message,
@@ -1460,7 +1527,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.9.0",
+          version: "2.0.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
