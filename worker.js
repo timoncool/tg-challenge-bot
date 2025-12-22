@@ -31,26 +31,38 @@ const ru = {
       weekly: "недельного",
       monthly: "месячного",
     };
-    return `🗳️ Голосуем за тему ${labels[type]} челленджа!`;
+    return `Голосование за тему ${labels[type]} челленджа`;
   },
   challengeAnnouncement: (type, topic, endTime, voteCount = 0) => {
     const labels = {
-      daily: "🎯 ЧЕЛЛЕНДЖ ДНЯ",
-      weekly: "🎯 ЧЕЛЛЕНДЖ НЕДЕЛИ",
-      monthly: "🎯 ЧЕЛЛЕНДЖ МЕСЯЦА",
+      daily: "ЧЕЛЛЕНДЖ ДНЯ",
+      weekly: "ЧЕЛЛЕНДЖ НЕДЕЛИ",
+      monthly: "ЧЕЛЛЕНДЖ МЕСЯЦА",
     };
-    const voteLine = voteCount > 0 ? `\n🗳 Голосов за тему: ${voteCount}` : "";
-    return `${labels[type]}
+    const voteLine = voteCount > 0 ? `\nГолосов: ${voteCount}` : "";
+    return `🎯 *${labels[type]}*
 
-🎨 Тема: ${topic}${voteLine}
+*Тема:* ${topic}${voteLine}
+*Дедлайн:* ${endTime}
 
-⏰ До: ${endTime}
+Отправьте изображение в эту тему для участия.
+Лучшая работа определяется по реакциям.
 
-📸 Для участия — просто отправьте изображение в эту тему!
-❤️ Ставьте реакции понравившимся работам
-🌚 Реакция «луна» не учитывается
+_Реакция 🌚 не учитывается_`;
+  },
+  // Extended winner announcement with full prompt for winners topic
+  winnerAnnouncementFull: (username, score, type, topic, topicFull) => {
+    const labels = {
+      daily: "дневного",
+      weekly: "недельного",
+      monthly: "месячного",
+    };
+    return `🏆 *Победитель ${labels[type]} челленджа*
 
-Удачи! 🍀`;
+*${username}* — ${score} реакций
+
+*Тема:* ${topic}
+${topicFull !== topic ? `\n_${topicFull}_` : ""}`;
   },
   winnerAnnouncement: (username, score, type) => {
     const labels = {
@@ -58,43 +70,40 @@ const ru = {
       weekly: "недельного",
       monthly: "месячного",
     };
-    return `🏆 ПОБЕДИТЕЛЬ ${labels[type].toUpperCase()} ЧЕЛЛЕНДЖА!
+    return `🏆 *Победитель ${labels[type]} челленджа*
 
-👤 ${username}
-⭐ Набрано реакций: ${score}
+*${username}* — ${score} реакций
 
-Поздравляем! 🎉`;
+Поздравляем!`;
   },
-  noSubmissions: "😔 К сожалению, в этом челлендже никто не участвовал.",
+  noSubmissions: "В этом челлендже не было участников.",
   leaderboardTitle: (type) => {
     const labels = {
       daily: "дневных",
       weekly: "недельных",
       monthly: "месячных",
     };
-    return `🏆 ТОП-10 победителей ${labels[type]} челленджей:`;
+    return `*Топ-10 победителей ${labels[type]} челленджей*`;
   },
-  helpMessage: `🤖 Бот для нейро-арт челленджей
+  helpMessage: `*Бот для нейро-арт челленджей*
 
-📋 Как участвовать:
-1. Дождитесь объявления темы челленджа
-2. Отправьте изображение в соответствующую тему
-3. Бот подтвердит получение работы ✅
-4. Ставьте реакции работам других участников
-5. Побеждает работа с наибольшим числом реакций
+*Как участвовать:*
+1. Дождитесь объявления темы
+2. Отправьте изображение в тему челленджа
+3. Ставьте реакции работам других участников
+4. Побеждает работа с наибольшим числом реакций
 
-⏰ Расписание:
-• Дневные: каждый день в 17:00
-• Недельные: каждое воскресенье в 17:00
-• Месячные: 1-го числа в 17:00
+*Расписание:*
+• Дневные — каждый день в 17:00
+• Недельные — воскресенье в 17:00
+• Месячные — 1-го числа в 17:00
 
-⚠️ Реакция 🌚 не учитывается
+_Реакция 🌚 не учитывается_
 
-📊 Команды:
-/current — текущие активные челленджи
-/stats — ваша статистика побед
-/leaderboard [daily|weekly|monthly] — топ победителей
-/help — эта справка`,
+*Команды:*
+/current — активные челленджи
+/stats — ваша статистика
+/leaderboard — топ победителей`,
 };
 
 // ============================================
@@ -649,6 +658,7 @@ async function handleMessage(update, env, config, tg, storage) {
     if (command === "/start" || command === "/help") {
       await tg.sendMessage(chatId, ru.helpMessage, {
         message_thread_id: threadId || undefined,
+        parse_mode: "Markdown",
       });
       return;
     }
@@ -784,37 +794,31 @@ async function handleMessage(update, env, config, tg, storage) {
       return;
     }
 
-    // Admin: Start challenges
+    // Admin: Start challenges (announcement is pinned, no extra notification needed)
     if (command === "/run_daily" && isAdmin) {
       await startChallenge(env, config, tg, storage, "daily");
-      await tg.sendMessage(chatId, "✅ Дневной челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
     if (command === "/run_weekly" && isAdmin) {
       await startChallenge(env, config, tg, storage, "weekly");
-      await tg.sendMessage(chatId, "✅ Недельный челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
     if (command === "/run_monthly" && isAdmin) {
       await startChallenge(env, config, tg, storage, "monthly");
-      await tg.sendMessage(chatId, "✅ Месячный челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
 
-    // Admin: Finish challenges
+    // Admin: Finish challenges (winner announcement is posted, no extra notification needed)
     if (command === "/finish_daily" && isAdmin) {
       await finishChallenge(env, config, tg, storage, "daily");
-      await tg.sendMessage(chatId, "✅ Дневной челлендж завершён!", { message_thread_id: threadId || undefined });
       return;
     }
     if (command === "/finish_weekly" && isAdmin) {
       await finishChallenge(env, config, tg, storage, "weekly");
-      await tg.sendMessage(chatId, "✅ Недельный челлендж завершён!", { message_thread_id: threadId || undefined });
       return;
     }
     if (command === "/finish_monthly" && isAdmin) {
       await finishChallenge(env, config, tg, storage, "monthly");
-      await tg.sendMessage(chatId, "✅ Месячный челлендж завершён!", { message_thread_id: threadId || undefined });
       return;
     }
 
@@ -979,12 +983,10 @@ ${formatChallenge(monthly, "• Месячный")}`;
       }
 
       const medals = ["🥇", "🥈", "🥉"];
-      let msg =
-        ru.leaderboardTitle(type) +
-        `\n📊 Всего участников: ${leaderboard.length}\n\n`;
+      let msg = ru.leaderboardTitle(type) + `\n\n`;
       leaderboard.slice(0, 10).forEach((e, i) => {
         const medal = medals[i] || `${i + 1}.`;
-        msg += `${medal} ${e.username || `User ${e.userId}`} — ${e.wins} 🏆\n`;
+        msg += `${medal} ${e.username || `User ${e.userId}`} — ${e.wins} побед\n`;
       });
 
       // Show user's position if not in top 10
@@ -992,14 +994,13 @@ ${formatChallenge(monthly, "• Месячный")}`;
       if (userId) {
         const userIndex = leaderboard.findIndex((e) => e.userId === userId);
         if (userIndex >= 10) {
-          msg += `\n📍 Ваше место: #${userIndex + 1} — ${leaderboard[userIndex].wins} 🏆`;
+          msg += `\n_Ваше место: #${userIndex + 1}_`;
         }
       }
 
-      msg += `\n\n💡 /leaderboard [daily|weekly|monthly]`;
-
       await tg.sendMessage(chatId, msg, {
         message_thread_id: threadId || undefined,
+        parse_mode: "Markdown",
       });
       return;
     }
@@ -1319,6 +1320,7 @@ async function finishChallenge(env, config, tg, storage, type) {
         {
           message_thread_id: challenge.topicThreadId || undefined,
           reply_to_message_id: winner.messageId,
+          parse_mode: "Markdown",
         },
       );
 
@@ -1332,10 +1334,14 @@ async function finishChallenge(env, config, tg, storage, type) {
               message_thread_id: config.topics.winners,
             },
           );
+          // Full announcement with complete prompt
           await tg.sendMessage(
             config.chatId,
-            `🏆 Победитель ${ru.challengeTypes[type]} #${challenge.id}\n👤 ${winnerName}\n🎨 Тема: "${challenge.topic}"\n⭐ Реакций: ${winner.score}`,
-            { message_thread_id: config.topics.winners },
+            ru.winnerAnnouncementFull(winnerName, winner.score, type, challenge.topic, challenge.topicFull || challenge.topic),
+            {
+              message_thread_id: config.topics.winners,
+              parse_mode: "Markdown",
+            },
           );
         } catch (e) {
           console.error("Forward error:", e);
@@ -1440,6 +1446,7 @@ async function startChallenge(env, config, tg, storage, type) {
       ru.challengeAnnouncement(type, fullTheme, endTimeStr, voteCount),
       {
         message_thread_id: topicId || undefined,
+        parse_mode: "Markdown",
       },
     );
 
@@ -1526,7 +1533,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "2.1.0",
+          version: "2.2.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
