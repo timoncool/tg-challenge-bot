@@ -6,27 +6,17 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "wrangler deploy --dry-run --outdir=dist && mv dist/index.js worker.js && rm -rf dist",
     "setup": "node scripts/setup.js"
   },
   "keywords": [
     "telegram",
     "bot",
     "challenge",
-    "cloudflare-workers",
-    "grammy"
+    "cloudflare-workers"
   ],
   "author": "",
   "license": "MIT",
-  "dependencies": {
-    "@grammyjs/auto-retry": "^2.0.2",
-    "@grammyjs/ratelimiter": "^1.2.1",
-    "grammy": "^1.38.4",
-    "hono": "^4.6.0"
-  },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241205.0",
-    "typescript": "^5.7.0",
     "wrangler": "^3.99.0"
   }
 }
