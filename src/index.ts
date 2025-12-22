@@ -3,7 +3,9 @@
 // Cloudflare Workers + grammY
 // ============================================
 
-import { Bot, webhookCallback } from "grammy";
+import { Bot, webhookCallback, Composer, BotError } from "grammy";
+import { autoRetry } from "@grammyjs/auto-retry";
+import { limit } from "@grammyjs/ratelimiter";
 import { Hono } from "hono";
 import type { Env, BotConfig } from "./types";
 import { handleSubmission } from "./handlers/submissions";
@@ -43,25 +45,92 @@ function createBot(env: Env): Bot {
   const bot = new Bot(env.BOT_TOKEN);
   const config = getConfig(env);
 
-  // Command handlers
-  bot.command("start", (ctx) => handleStart(ctx, env, config));
-  bot.command("help", (ctx) => handleHelp(ctx, env, config));
-  bot.command("stats", (ctx) => handleStats(ctx, env, config));
-  bot.command("leaderboard", (ctx) => handleLeaderboard(ctx, env, config));
-  bot.command("current", (ctx) => handleCurrent(ctx, env, config));
+  // ============================================
+  // Auto-retry plugin (handles 429 rate limits and network errors)
+  // ============================================
+  bot.api.config.use(
+    autoRetry({
+      maxRetryAttempts: 3,
+      maxDelaySeconds: 10,
+      rethrowInternalServerErrors: false, // retry on 500 errors too
+      rethrowHttpErrors: false, // retry on network errors
+    })
+  );
 
-  // Handle photos (submissions)
-  bot.on("message:photo", (ctx) => handleSubmission(ctx, env, config));
-  bot.on("message:document", (ctx) => handleSubmission(ctx, env, config));
+  // ============================================
+  // Rate limiting middleware (1 message per second per user)
+  // ============================================
+  bot.use(
+    limit({
+      timeFrame: 2000, // 2 seconds
+      limit: 3, // allow 3 messages per timeFrame
+      onLimitExceeded: async (ctx) => {
+        console.log(`Rate limit exceeded for user: ${ctx.from?.id}`);
+        // Silently ignore excessive requests
+      },
+      keyGenerator: (ctx) => {
+        // Rate limit by user ID, or skip for system events
+        return ctx.from?.id?.toString();
+      },
+    })
+  );
 
-  // Handle reaction count updates
-  bot.on("message_reaction_count", (ctx) =>
+  // ============================================
+  // Error boundary for submission handlers
+  // ============================================
+  const submissionComposer = new Composer();
+  submissionComposer.on("message:photo", (ctx) => handleSubmission(ctx, env, config));
+  submissionComposer.on("message:document", (ctx) => handleSubmission(ctx, env, config));
+
+  bot.errorBoundary(
+    (err: BotError) => {
+      console.error("Submission handler error:", err.message);
+      // Don't crash on submission errors, just log them
+    }
+  ).use(submissionComposer);
+
+  // ============================================
+  // Error boundary for reaction handlers
+  // ============================================
+  const reactionComposer = new Composer();
+  reactionComposer.on("message_reaction_count", (ctx) =>
     handleReactionCount(ctx, env, config)
   );
 
-  // Error handler
+  bot.errorBoundary(
+    (err: BotError) => {
+      console.error("Reaction handler error:", err.message);
+      // Don't crash on reaction errors, just log them
+    }
+  ).use(reactionComposer);
+
+  // ============================================
+  // Command handlers (with their own error boundary)
+  // ============================================
+  const commandComposer = new Composer();
+  commandComposer.command("start", (ctx) => handleStart(ctx, env, config));
+  commandComposer.command("help", (ctx) => handleHelp(ctx, env, config));
+  commandComposer.command("stats", (ctx) => handleStats(ctx, env, config));
+  commandComposer.command("leaderboard", (ctx) => handleLeaderboard(ctx, env, config));
+  commandComposer.command("current", (ctx) => handleCurrent(ctx, env, config));
+
+  bot.errorBoundary(
+    async (err: BotError) => {
+      console.error("Command handler error:", err.message);
+      // Try to notify user about error
+      try {
+        await err.ctx.reply("An error occurred. Please try again later.");
+      } catch {
+        // Ignore if we can't reply
+      }
+    }
+  ).use(commandComposer);
+
+  // ============================================
+  // Global error handler (fallback)
+  // ============================================
   bot.catch((err) => {
-    console.error("Bot error:", err);
+    console.error("Unhandled bot error:", err);
   });
 
   return bot;

@@ -21,6 +21,13 @@ export async function handleSubmission(
     return;
   }
 
+  // Reject forwarded messages (anti-plagiarism)
+  // forward_origin is the modern field for forwarded messages in Telegram Bot API 7.0+
+  if (ctx.message?.forward_origin) {
+    console.log("Rejected forwarded submission from user:", ctx.message?.from?.id);
+    return;
+  }
+
   // Check if message is in the correct chat
   const chatId = ctx.message?.chat?.id;
   if (chatId !== config.chatId) {
