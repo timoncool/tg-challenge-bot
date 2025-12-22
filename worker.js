@@ -596,11 +596,14 @@ async function handleMessage(update, env, config, tg, storage) {
     // ============================================
     // ADMIN COMMANDS (только для админов группы)
     // ============================================
+    // Убираем @username из команды (в группах Telegram добавляет его)
+    const command = text.split("@")[0].split(" ")[0].toLowerCase();
+
     const isAdmin = config.chatId && message.from?.id
       ? await tg.isUserAdmin(config.chatId, message.from.id)
       : false;
 
-    if (text === "/admin" && isAdmin) {
+    if (command === "/admin" && isAdmin) {
       await tg.sendMessage(
         chatId,
         `🔧 АДМИН-ПАНЕЛЬ
@@ -628,19 +631,19 @@ async function handleMessage(update, env, config, tg, storage) {
     }
 
     // Admin: Create polls
-    if (text === "/poll_daily" && isAdmin) {
+    if (command === "/poll_daily" && isAdmin) {
       await storage.deletePoll("daily");
       await generatePoll(env, config, tg, storage, "daily");
       await tg.sendMessage(chatId, "✅ Опрос дня создан!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (text === "/poll_weekly" && isAdmin) {
+    if (command === "/poll_weekly" && isAdmin) {
       await storage.deletePoll("weekly");
       await generatePoll(env, config, tg, storage, "weekly");
       await tg.sendMessage(chatId, "✅ Опрос недели создан!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (text === "/poll_monthly" && isAdmin) {
+    if (command === "/poll_monthly" && isAdmin) {
       await storage.deletePoll("monthly");
       await generatePoll(env, config, tg, storage, "monthly");
       await tg.sendMessage(chatId, "✅ Опрос месяца создан!", { message_thread_id: threadId || undefined });
@@ -648,41 +651,41 @@ async function handleMessage(update, env, config, tg, storage) {
     }
 
     // Admin: Start challenges
-    if (text === "/start_daily" && isAdmin) {
+    if (command === "/start_daily" && isAdmin) {
       await startChallenge(env, config, tg, storage, "daily");
       await tg.sendMessage(chatId, "✅ Дневной челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (text === "/start_weekly" && isAdmin) {
+    if (command === "/start_weekly" && isAdmin) {
       await startChallenge(env, config, tg, storage, "weekly");
       await tg.sendMessage(chatId, "✅ Недельный челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (text === "/start_monthly" && isAdmin) {
+    if (command === "/start_monthly" && isAdmin) {
       await startChallenge(env, config, tg, storage, "monthly");
       await tg.sendMessage(chatId, "✅ Месячный челлендж запущен!", { message_thread_id: threadId || undefined });
       return;
     }
 
     // Admin: Finish challenges
-    if (text === "/finish_daily" && isAdmin) {
+    if (command === "/finish_daily" && isAdmin) {
       await finishChallenge(env, config, tg, storage, "daily");
       await tg.sendMessage(chatId, "✅ Дневной челлендж завершён!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (text === "/finish_weekly" && isAdmin) {
+    if (command === "/finish_weekly" && isAdmin) {
       await finishChallenge(env, config, tg, storage, "weekly");
       await tg.sendMessage(chatId, "✅ Недельный челлендж завершён!", { message_thread_id: threadId || undefined });
       return;
     }
-    if (text === "/finish_monthly" && isAdmin) {
+    if (command === "/finish_monthly" && isAdmin) {
       await finishChallenge(env, config, tg, storage, "monthly");
       await tg.sendMessage(chatId, "✅ Месячный челлендж завершён!", { message_thread_id: threadId || undefined });
       return;
     }
 
     // Admin: Status
-    if (text === "/status" && isAdmin) {
+    if (command === "/status" && isAdmin) {
       const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly] = await Promise.all([
         storage.getChallenge("daily"),
         storage.getChallenge("weekly"),
@@ -1197,7 +1200,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.7.0",
+          version: "1.7.1",
         }),
         {
           headers: { "Content-Type": "application/json" },
