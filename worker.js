@@ -751,7 +751,9 @@ async function handleMessage(update, env, config, tg, storage) {
 
 📈 Статус:
 /status — текущее состояние всех челленджей
-/cs daily|weekly|monthly — статистика конкретного челленджа
+/cs_daily — статистика дневного
+/cs_weekly — статистика недельного
+/cs_monthly — статистика месячного
 /test_ai — проверить работу Gemini API
 
 ⚙️ Настройка тем:
@@ -765,23 +767,20 @@ async function handleMessage(update, env, config, tg, storage) {
       return;
     }
 
-    // Admin: Create polls
+    // Admin: Create polls (no confirmation message - poll itself is visible)
     if (command === "/poll_daily" && isAdmin) {
       await storage.deletePoll("daily");
       await generatePoll(env, config, tg, storage, "daily");
-      await tg.sendMessage(chatId, "✅ Опрос дня создан!", { message_thread_id: threadId || undefined });
       return;
     }
     if (command === "/poll_weekly" && isAdmin) {
       await storage.deletePoll("weekly");
       await generatePoll(env, config, tg, storage, "weekly");
-      await tg.sendMessage(chatId, "✅ Опрос недели создан!", { message_thread_id: threadId || undefined });
       return;
     }
     if (command === "/poll_monthly" && isAdmin) {
       await storage.deletePoll("monthly");
       await generatePoll(env, config, tg, storage, "monthly");
-      await tg.sendMessage(chatId, "✅ Опрос месяца создан!", { message_thread_id: threadId || undefined });
       return;
     }
 
@@ -853,19 +852,10 @@ ${formatChallenge(monthly, "• Месячный")}`;
       return;
     }
 
-    // Admin: Current challenge stats - /cs daily, /cs weekly, /cs monthly
-    if ((command === "/challenge_stats" || command === "/cs") && isAdmin) {
-      const args = text.trim().split(/\s+/);
-      const typeMap = { daily: "daily", weekly: "weekly", monthly: "monthly", d: "daily", w: "weekly", m: "monthly" };
-      const type = typeMap[args[1]?.toLowerCase()];
-
-      if (!type) {
-        await tg.sendMessage(chatId, "❓ Укажи тип: /cs daily, /cs weekly или /cs monthly", {
-          message_thread_id: threadId || undefined,
-        });
-        return;
-      }
-
+    // Admin: Current challenge stats - /cs_daily, /cs_weekly, /cs_monthly
+    const csMatch = command.match(/^\/cs_(daily|weekly|monthly)$/);
+    if (csMatch && isAdmin) {
+      const type = csMatch[1];
       const challenge = await storage.getChallenge(type);
       const typeNames = { daily: "🌅 ДНЕВНОЙ", weekly: "📅 НЕДЕЛЬНЫЙ", monthly: "📆 МЕСЯЧНЫЙ" };
 
@@ -1178,17 +1168,26 @@ async function handleReaction(update, env, config, storage) {
       return;
     }
 
-    const threadId = reaction.message_thread_id;
-    const challengeType = await storage.isActiveTopic(threadId);
+    // Find which challenge this message belongs to by checking all active challenges
+    let challengeType = null;
+    let challenge = null;
 
-    if (!challengeType) {
-      console.log("Reaction ignored: not an active topic", { threadId });
-      return;
+    for (const type of ["daily", "weekly", "monthly"]) {
+      const ch = await storage.getChallenge(type);
+      if (ch?.status === "active" && Date.now() < ch.endsAt) {
+        // Check if this message is a submission in this challenge
+        const submissions = await storage.getSubmissions(type, ch.id);
+        const found = submissions.find(s => s.messageId === reaction.message_id);
+        if (found) {
+          challengeType = type;
+          challenge = ch;
+          break;
+        }
+      }
     }
 
-    const challenge = await storage.getChallenge(challengeType);
-    if (challenge?.status !== "active" || Date.now() >= challenge.endsAt) {
-      console.log("Reaction ignored: challenge not active", { status: challenge?.status, endsAt: challenge?.endsAt });
+    if (!challengeType || !challenge) {
+      console.log("Reaction ignored: message not found in any active challenge", { messageId: reaction.message_id });
       return;
     }
 
@@ -1221,7 +1220,7 @@ async function handleReaction(update, env, config, storage) {
       totalScore,
     );
 
-    console.log(`Reaction scored: msg=${reaction.message_id}, user=${userId}, userScore=${userScore}, totalScore=${totalScore}`);
+    console.log(`Reaction scored: type=${challengeType}, msg=${reaction.message_id}, user=${userId}, userScore=${userScore}, totalScore=${totalScore}`);
   } catch (e) {
     console.error("handleReaction error:", {
       error: e.message,
@@ -1527,7 +1526,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "2.0.0",
+          version: "2.1.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
