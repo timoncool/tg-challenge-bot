@@ -64,18 +64,22 @@ ${startDate} — ${endDate}
 Реакция 🌚 не учитывается`;
   },
   // Extended winner announcement with full prompt for winners topic
-  winnerAnnouncementFull: (username, score, type, topic, topicFull) => {
+  winnerAnnouncementFull: (username, score, type, topicFull) => {
     const labels = {
       daily: "дневного",
       weekly: "недельного",
       monthly: "месячного",
     };
+    // Parse "Title | Description" format
+    const parts = topicFull.split("|").map((s) => s.trim());
+    const title = parts[0] || topicFull;
+    const description = parts[1] || "";
+
     return `🏆 Победитель ${labels[type]} челленджа
 
 ${username} — ${score} реакций
 
-Тема: ${topic}
-${topicFull !== topic ? `\n${topicFull}` : ""}`;
+${title}${description ? `\n📝 ${description}` : ""}`;
   },
   winnerAnnouncement: (username, score, type) => {
     const labels = {
@@ -2515,7 +2519,7 @@ async function finishChallenge(env, chatId, config, tg, storage, type) {
               : `Участник #${winner.userId}`;
             await tg.sendMessage(
               chatId,
-              ru.winnerAnnouncementFull(winnerName, winner.score, type, challenge.topic, challenge.topicFull || challenge.topic),
+              ru.winnerAnnouncementFull(winnerName, winner.score, type, challenge.topicFull || challenge.topic),
               {
                 message_thread_id: config.topics.winners,
               },
@@ -2576,13 +2580,18 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
 
         // Find matching full theme from stored options
+        // Use startsWith because Telegram truncates poll options to ~100 chars
         const matchingFull = poll.options.find(
-          (o) => parseTheme(o).short === winnerShort,
+          (o) => {
+            const short = parseTheme(o).short;
+            return short === winnerShort || short.startsWith(winnerShort.replace(/\.{3}$/, ""));
+          },
         );
         if (matchingFull) {
           const parsed = parseTheme(matchingFull);
           shortTheme = parsed.short;
-          fullTheme = parsed.full;
+          // Store the COMPLETE original string (title + description)
+          fullTheme = matchingFull;
         } else if (winnerShort) {
           shortTheme = winnerShort;
           fullTheme = winnerShort;
@@ -2593,7 +2602,8 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         if (poll.options && poll.options.length > 0) {
           const parsed = parseTheme(poll.options[0]);
           shortTheme = parsed.short;
-          fullTheme = parsed.full;
+          // Store the COMPLETE original string (title + description)
+          fullTheme = poll.options[0];
         }
       }
       await storage.deletePoll(chatId, type);
