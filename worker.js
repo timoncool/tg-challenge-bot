@@ -114,6 +114,21 @@ function getConfig(env) {
   };
 }
 
+// Get config with KV overrides for topics
+async function getConfigWithTopics(env, storage) {
+  const base = getConfig(env);
+  const kvTopics = await storage.get("settings:topics");
+  if (kvTopics) {
+    base.topics = {
+      daily: kvTopics.daily || base.topics.daily,
+      weekly: kvTopics.weekly || base.topics.weekly,
+      monthly: kvTopics.monthly || base.topics.monthly,
+      winners: kvTopics.winners || base.topics.winners,
+    };
+  }
+  return base;
+}
+
 // ============================================
 // TELEGRAM API
 // ============================================
@@ -629,6 +644,75 @@ async function handleMessage(update, env, config, tg, storage) {
       ? await tg.isUserAdmin(config.chatId, message.from.id)
       : false;
 
+    // Get topic ID - для настройки
+    if (command === "/topic_id" && isAdmin) {
+      const topicInfo = threadId
+        ? `📍 ID этой темы: \`${threadId}\`\n\nИли используй команды:\n/set_daily — назначить для дневных\n/set_weekly — для недельных\n/set_monthly — для месячных\n/set_winners — для победителей`
+        : "⚠️ Это общий чат, не тема форума. Напиши эту команду внутри темы.";
+      await tg.sendMessage(chatId, topicInfo, {
+        message_thread_id: threadId || undefined,
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    // Set topic commands
+    if (command === "/set_daily" && isAdmin) {
+      if (!threadId) {
+        await tg.sendMessage(chatId, "⚠️ Напиши эту команду внутри темы форума!", { message_thread_id: undefined });
+        return;
+      }
+      const kvTopics = (await storage.get("settings:topics")) || {};
+      kvTopics.daily = threadId;
+      await storage.set("settings:topics", kvTopics);
+      await tg.sendMessage(chatId, `✅ Эта тема назначена для ДНЕВНЫХ челленджей (ID: ${threadId})`, {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    if (command === "/set_weekly" && isAdmin) {
+      if (!threadId) {
+        await tg.sendMessage(chatId, "⚠️ Напиши эту команду внутри темы форума!", { message_thread_id: undefined });
+        return;
+      }
+      const kvTopics = (await storage.get("settings:topics")) || {};
+      kvTopics.weekly = threadId;
+      await storage.set("settings:topics", kvTopics);
+      await tg.sendMessage(chatId, `✅ Эта тема назначена для НЕДЕЛЬНЫХ челленджей (ID: ${threadId})`, {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    if (command === "/set_monthly" && isAdmin) {
+      if (!threadId) {
+        await tg.sendMessage(chatId, "⚠️ Напиши эту команду внутри темы форума!", { message_thread_id: undefined });
+        return;
+      }
+      const kvTopics = (await storage.get("settings:topics")) || {};
+      kvTopics.monthly = threadId;
+      await storage.set("settings:topics", kvTopics);
+      await tg.sendMessage(chatId, `✅ Эта тема назначена для МЕСЯЧНЫХ челленджей (ID: ${threadId})`, {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    if (command === "/set_winners" && isAdmin) {
+      if (!threadId) {
+        await tg.sendMessage(chatId, "⚠️ Напиши эту команду внутри темы форума!", { message_thread_id: undefined });
+        return;
+      }
+      const kvTopics = (await storage.get("settings:topics")) || {};
+      kvTopics.winners = threadId;
+      await storage.set("settings:topics", kvTopics);
+      await tg.sendMessage(chatId, `✅ Эта тема назначена для ПОБЕДИТЕЛЕЙ (ID: ${threadId})`, {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
     if (command === "/admin" && isAdmin) {
       await tg.sendMessage(
         chatId,
@@ -652,7 +736,14 @@ async function handleMessage(update, env, config, tg, storage) {
 📈 Статус:
 /status — текущее состояние всех челленджей
 /cs daily|weekly|monthly — статистика конкретного челленджа
-/test_ai — проверить работу Gemini API`,
+/test_ai — проверить работу Gemini API
+
+⚙️ Настройка тем:
+/set_daily — назначить тему для дневных
+/set_weekly — назначить тему для недельных
+/set_monthly — назначить тему для месячных
+/set_winners — назначить тему для победителей
+/topic_id — узнать ID текущей темы`,
         { message_thread_id: threadId || undefined }
       );
       return;
@@ -1369,7 +1460,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.8.4",
+          version: "1.9.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
@@ -1441,9 +1532,9 @@ export default {
       }
 
       try {
-        const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
 
         // Delete existing poll if any
         await storage.deletePoll(type);
@@ -1479,9 +1570,9 @@ export default {
       }
 
       try {
-        const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
 
         await startChallenge(env, config, tg, storage, type);
 
@@ -1515,9 +1606,9 @@ export default {
       }
 
       try {
-        const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
 
         await finishChallenge(env, config, tg, storage, type);
 
@@ -1580,7 +1671,8 @@ export default {
           });
         }
 
-        const config = getConfig(env);
+        const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
         return new Response(
           JSON.stringify({
             configured: !!env.BOT_TOKEN,
@@ -1625,9 +1717,9 @@ export default {
           await env.CHALLENGE_KV.put(dedupKey, "1", { expirationTtl: 3600 });
         }
 
-        const config = getConfig(env);
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
+        const config = await getConfigWithTopics(env, storage);
 
         if (update.message) {
           await handleMessage(update, env, config, tg, storage);
@@ -1656,9 +1748,9 @@ export default {
         return;
       }
 
-      const config = getConfig(env);
       const tg = new TelegramAPI(env.BOT_TOKEN);
       const storage = new Storage(env.CHALLENGE_KV);
+      const config = await getConfigWithTopics(env, storage);
 
       await handleCron(env, config, tg, storage, event.cron);
     } catch (e) {
