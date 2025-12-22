@@ -47,17 +47,22 @@ const ru = {
     };
     return `Голосование за тему ${labels[type]} челленджа`;
   },
-  challengeAnnouncement: (type, topic, startDate, endDate, voteCount = 0) => {
+  challengeAnnouncement: (type, topicFull, startDate, endDate, voteCount = 0) => {
     const labels = {
       daily: "ЧЕЛЛЕНДЖ ДНЯ",
       weekly: "ЧЕЛЛЕНДЖ НЕДЕЛИ",
       monthly: "ЧЕЛЛЕНДЖ МЕСЯЦА",
     };
     const voteLine = voteCount > 0 ? ` (${voteCount} голосов)` : "";
-    return `${labels[type]}
-${startDate} — ${endDate}
+    // Parse "Title | Description" format
+    const parts = topicFull.split("|").map((s) => s.trim());
+    const title = parts[0] || topicFull;
+    const description = parts[1] || "";
 
-Тема: ${topic}${voteLine}
+    return `${labels[type]}
+${startDate} — ${endDate}${voteLine}
+
+${title}${description ? `\n📝 ${description}` : ""}
 
 Отправьте изображение в эту тему для участия.
 Лучшая работа определяется по реакциям.
