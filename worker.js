@@ -1765,40 +1765,18 @@ ${formatChallenge(monthly, "Месячный")}`;
     if (command === "/test_ai" && isAdmin) {
       await tg.sendMessage(chatId, "Тестирую Gemini API...", { message_thread_id: threadId || undefined });
       try {
-        // Direct API call to see raw response
-        const testPrompt = "Придумай 3 темы для арт-челленджа. Формат: Название | Описание";
-        const apiKey = env.GEMINI_API_KEY;
+        const contentMode = await storage.getContentMode(chatId);
+        const themes = await generateThemes(env.GEMINI_API_KEY, "daily", "ru", [], contentMode);
 
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-goog-api-key": apiKey,
-            },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: testPrompt }] }],
-              generationConfig: { temperature: 1.0, maxOutputTokens: 300 },
-            }),
-          },
-        );
-
-        const status = response.status;
-        const data = await response.json();
-
-        let msg = `Gemini API (${status})\n\n`;
-
-        if (data.error) {
-          msg += `Ошибка: ${data.error.message || JSON.stringify(data.error)}`;
-        } else if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-          const text = data.candidates[0].content.parts[0].text;
-          msg += text.substring(0, 500);
+        if (themes.length === 0) {
+          await tg.sendMessage(chatId, "Ошибка: AI не вернул темы", { message_thread_id: threadId || undefined });
         } else {
-          msg += `Пустой ответ: ${JSON.stringify(data).substring(0, 400)}`;
+          let msg = `Gemini API ✅ (режим: ${contentMode})\n\n`;
+          themes.slice(0, 3).forEach((theme, i) => {
+            msg += `${i + 1}. ${theme}\n\n`;
+          });
+          await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
         }
-
-        await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
       } catch (e) {
         await tg.sendMessage(chatId, `Ошибка: ${e.message}`, { message_thread_id: threadId || undefined });
       }
