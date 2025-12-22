@@ -12,7 +12,7 @@
 #
 
 name = "tg-challenge-bot"
-main = "src/index.ts"
+main = "worker.js"
 compatibility_date = "2024-12-01"
 
 # ============================================
