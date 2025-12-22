@@ -625,7 +625,7 @@ async function handleMessage(update, env, config, tg, storage) {
 
 📈 Статус:
 /status — текущее состояние всех челленджей
-/cs — статистика текущих челленджей (работы + баллы)
+/cs daily|weekly|monthly — статистика конкретного челленджа
 /test_ai — проверить работу Gemini API`,
         { message_thread_id: threadId || undefined }
       );
@@ -720,36 +720,45 @@ ${formatChallenge(monthly, "• Месячный")}`;
       return;
     }
 
-    // Admin: Current challenge stats
+    // Admin: Current challenge stats - /cs daily, /cs weekly, /cs monthly
     if ((command === "/challenge_stats" || command === "/cs") && isAdmin) {
-      const [daily, weekly, monthly] = await Promise.all([
-        storage.getChallenge("daily"),
-        storage.getChallenge("weekly"),
-        storage.getChallenge("monthly"),
-      ]);
+      const args = text.trim().split(/\s+/);
+      const typeMap = { daily: "daily", weekly: "weekly", monthly: "monthly", d: "daily", w: "weekly", m: "monthly" };
+      const type = typeMap[args[1]?.toLowerCase()];
 
-      const formatStats = async (challenge, name) => {
-        if (!challenge || challenge.status !== "active") {
-          return `${name}: нет активного`;
-        }
-        const submissions = await storage.getSubmissions(challenge.type, challenge.id);
-        if (submissions.length === 0) {
-          return `${name}: 0 работ`;
-        }
-        const sorted = [...submissions].sort((a, b) => b.score - a.score);
-        const top = sorted.slice(0, 5).map((s, i) =>
-          `   ${i + 1}. @${s.username || s.userId} — ${s.score} ❤️`
-        ).join("\n");
-        return `${name}: ${submissions.length} работ\n${top}`;
-      };
+      if (!type) {
+        await tg.sendMessage(chatId, "❓ Укажи тип: /cs daily, /cs weekly или /cs monthly", {
+          message_thread_id: threadId || undefined,
+        });
+        return;
+      }
 
-      const [dailyStats, weeklyStats, monthlyStats] = await Promise.all([
-        formatStats(daily, "🌅 Дневной"),
-        formatStats(weekly, "📅 Недельный"),
-        formatStats(monthly, "📆 Месячный"),
-      ]);
+      const challenge = await storage.getChallenge(type);
+      const typeNames = { daily: "🌅 ДНЕВНОЙ", weekly: "📅 НЕДЕЛЬНЫЙ", monthly: "📆 МЕСЯЧНЫЙ" };
 
-      await tg.sendMessage(chatId, `📊 СТАТИСТИКА ЧЕЛЛЕНДЖЕЙ\n\n${dailyStats}\n\n${weeklyStats}\n\n${monthlyStats}`, {
+      if (!challenge || challenge.status !== "active") {
+        await tg.sendMessage(chatId, `${typeNames[type]} ЧЕЛЛЕНДЖ\n\n❌ Нет активного челленджа`, {
+          message_thread_id: threadId || undefined,
+        });
+        return;
+      }
+
+      const submissions = await storage.getSubmissions(type, challenge.id);
+      const hours = Math.max(0, Math.floor((challenge.endsAt - Date.now()) / 3600000));
+
+      if (submissions.length === 0) {
+        await tg.sendMessage(chatId, `${typeNames[type]} ЧЕЛЛЕНДЖ\n\n🎨 Тема: "${challenge.topic}"\n⏰ Осталось: ${hours}ч\n\n📭 Пока нет работ`, {
+          message_thread_id: threadId || undefined,
+        });
+        return;
+      }
+
+      const sorted = [...submissions].sort((a, b) => b.score - a.score);
+      const list = sorted.map((s, i) =>
+        `${i + 1}. @${s.username || s.userId} — ${s.score} ❤️`
+      ).join("\n");
+
+      await tg.sendMessage(chatId, `${typeNames[type]} ЧЕЛЛЕНДЖ\n\n🎨 Тема: "${challenge.topic}"\n⏰ Осталось: ${hours}ч\n👥 Участников: ${submissions.length}\n\n🏆 Рейтинг:\n${list}`, {
         message_thread_id: threadId || undefined,
       });
       return;
@@ -1305,7 +1314,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.8.2",
+          version: "1.8.3",
         }),
         {
           headers: { "Content-Type": "application/json" },
