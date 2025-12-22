@@ -29,7 +29,8 @@ export class AIService {
 
   async generateThemes(
     type: ChallengeType,
-    language: "ru" | "en" = "ru"
+    language: "ru" | "en" = "ru",
+    previousThemes: string[] = []
   ): Promise<string[]> {
     const complexity = {
       daily: language === "ru"
@@ -43,6 +44,13 @@ export class AIService {
         : "complex, ambitious, a real challenge for mastery",
     };
 
+    // Build exclusion list from previous themes
+    const exclusionNote = previousThemes.length > 0
+      ? language === "ru"
+        ? `\n\nВАЖНО: НЕ предлагай темы похожие на эти (уже использованные):\n${previousThemes.map((t, i) => `- ${t}`).join("\n")}`
+        : `\n\nIMPORTANT: DO NOT suggest themes similar to these (already used):\n${previousThemes.map((t, i) => `- ${t}`).join("\n")}`
+      : "";
+
     const prompt = language === "ru"
       ? `Ты помогаешь сообществу нейро-арт генерации (Midjourney, Stable Diffusion, DALL-E, Flux и т.д.).
 
@@ -55,7 +63,7 @@ export class AIService {
 - Вдохновляющими для AI-арта
 - Разнообразными по стилям и сюжетам
 - На русском языке
-- Без нумерации и пояснений
+- Без нумерации и пояснений${exclusionNote}
 
 Ответь ТОЛЬКО списком из 4 тем, по одной на строку.`
       : `You help an AI art generation community (Midjourney, Stable Diffusion, DALL-E, Flux, etc.).
@@ -69,7 +77,7 @@ Requirements:
 - Inspiring for AI art
 - Diverse in styles and subjects
 - In English
-- No numbering or explanations
+- No numbering or explanations${exclusionNote}
 
 Reply with ONLY a list of 4 themes, one per line.`;
 
