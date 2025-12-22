@@ -1062,7 +1062,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.4.0",
+          version: "1.5.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
@@ -1104,6 +1104,157 @@ export default {
         );
       } catch (e) {
         console.error("Setup error:", e);
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // ============================================
+    // ADMIN ENDPOINTS (для тестирования)
+    // ============================================
+
+    // POST /admin/poll/daily|weekly|monthly - создать опрос
+    if (url.pathname.startsWith("/admin/poll/") && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const type = url.pathname.split("/").pop();
+      if (!["daily", "weekly", "monthly"].includes(type)) {
+        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const config = getConfig(env);
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        const storage = new Storage(env.CHALLENGE_KV);
+
+        // Delete existing poll if any
+        await storage.deletePoll(type);
+        await generatePoll(env, config, tg, storage, type);
+
+        return new Response(JSON.stringify({ success: true, action: "poll", type }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // POST /admin/start/daily|weekly|monthly - запустить челлендж
+    if (url.pathname.startsWith("/admin/start/") && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const type = url.pathname.split("/").pop();
+      if (!["daily", "weekly", "monthly"].includes(type)) {
+        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const config = getConfig(env);
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        const storage = new Storage(env.CHALLENGE_KV);
+
+        await startChallenge(env, config, tg, storage, type);
+
+        return new Response(JSON.stringify({ success: true, action: "start", type }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // POST /admin/finish/daily|weekly|monthly - завершить челлендж
+    if (url.pathname.startsWith("/admin/finish/") && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const type = url.pathname.split("/").pop();
+      if (!["daily", "weekly", "monthly"].includes(type)) {
+        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const config = getConfig(env);
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        const storage = new Storage(env.CHALLENGE_KV);
+
+        await finishChallenge(env, config, tg, storage, type);
+
+        return new Response(JSON.stringify({ success: true, action: "finish", type }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // GET /admin/status - посмотреть текущее состояние
+    if (url.pathname === "/admin/status") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const storage = new Storage(env.CHALLENGE_KV);
+        const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly, activeTopics] = await Promise.all([
+          storage.getChallenge("daily"),
+          storage.getChallenge("weekly"),
+          storage.getChallenge("monthly"),
+          storage.getPoll("daily"),
+          storage.getPoll("weekly"),
+          storage.getPoll("monthly"),
+          storage.getActiveTopics(),
+        ]);
+
+        return new Response(JSON.stringify({
+          challenges: { daily, weekly, monthly },
+          polls: { daily: !!pollDaily, weekly: !!pollWeekly, monthly: !!pollMonthly },
+          activeTopics,
+        }, null, 2), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
