@@ -1,0 +1,29 @@
+{
+  "name": "tg-challenge-bot",
+  "version": "1.0.0",
+  "description": "Telegram Challenge Bot for creative communities - daily, weekly, monthly challenges with voting and reactions",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "setup": "node scripts/setup.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "challenge",
+    "cloudflare-workers",
+    "grammy"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "grammy": "^1.38.4",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.99.0"
+  }
+}
