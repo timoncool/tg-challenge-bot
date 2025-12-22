@@ -624,7 +624,9 @@ async function handleMessage(update, env, config, tg, storage) {
 /finish_monthly — завершить месячный
 
 📈 Статус:
-/status — текущее состояние всех челленджей`,
+/status — текущее состояние всех челленджей
+/cs daily|weekly|monthly — статистика конкретного челленджа
+/test_ai — проверить работу Gemini API`,
         { message_thread_id: threadId || undefined }
       );
       return;
@@ -715,6 +717,65 @@ ${formatChallenge(weekly, "• Недельный")}
 ${formatChallenge(monthly, "• Месячный")}`;
 
       await tg.sendMessage(chatId, statusMsg, { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Current challenge stats - /cs daily, /cs weekly, /cs monthly
+    if ((command === "/challenge_stats" || command === "/cs") && isAdmin) {
+      const args = text.trim().split(/\s+/);
+      const typeMap = { daily: "daily", weekly: "weekly", monthly: "monthly", d: "daily", w: "weekly", m: "monthly" };
+      const type = typeMap[args[1]?.toLowerCase()];
+
+      if (!type) {
+        await tg.sendMessage(chatId, "❓ Укажи тип: /cs daily, /cs weekly или /cs monthly", {
+          message_thread_id: threadId || undefined,
+        });
+        return;
+      }
+
+      const challenge = await storage.getChallenge(type);
+      const typeNames = { daily: "🌅 ДНЕВНОЙ", weekly: "📅 НЕДЕЛЬНЫЙ", monthly: "📆 МЕСЯЧНЫЙ" };
+
+      if (!challenge || challenge.status !== "active") {
+        await tg.sendMessage(chatId, `${typeNames[type]} ЧЕЛЛЕНДЖ\n\n❌ Нет активного челленджа`, {
+          message_thread_id: threadId || undefined,
+        });
+        return;
+      }
+
+      const submissions = await storage.getSubmissions(type, challenge.id);
+      const hours = Math.max(0, Math.floor((challenge.endsAt - Date.now()) / 3600000));
+
+      if (submissions.length === 0) {
+        await tg.sendMessage(chatId, `${typeNames[type]} ЧЕЛЛЕНДЖ\n\n🎨 Тема: "${challenge.topic}"\n⏰ Осталось: ${hours}ч\n\n📭 Пока нет работ`, {
+          message_thread_id: threadId || undefined,
+        });
+        return;
+      }
+
+      const sorted = [...submissions].sort((a, b) => b.score - a.score);
+      const list = sorted.map((s, i) =>
+        `${i + 1}. @${s.username || s.userId} — ${s.score} ❤️`
+      ).join("\n");
+
+      await tg.sendMessage(chatId, `${typeNames[type]} ЧЕЛЛЕНДЖ\n\n🎨 Тема: "${challenge.topic}"\n⏰ Осталось: ${hours}ч\n👥 Участников: ${submissions.length}\n\n🏆 Рейтинг:\n${list}`, {
+        message_thread_id: threadId || undefined,
+      });
+      return;
+    }
+
+    // Admin: Test Gemini API
+    if (command === "/test_ai" && isAdmin) {
+      await tg.sendMessage(chatId, "⏳ Тестирую Gemini API...", { message_thread_id: threadId || undefined });
+      try {
+        const themes = await generateThemes(env.GEMINI_API_KEY, "daily");
+        const isGenerated = themes[0] !== "Кот-астронавт | Пушистый кот в скафандре чинит космический корабль среди звёзд";
+        const status = isGenerated ? "✅ AI работает!" : "⚠️ Используются заглушки (AI не ответил)";
+        const themesPreview = themes.slice(0, 3).map((t, i) => `${i + 1}. ${t}`).join("\n");
+        await tg.sendMessage(chatId, `${status}\n\nПримеры тем:\n${themesPreview}`, { message_thread_id: threadId || undefined });
+      } catch (e) {
+        await tg.sendMessage(chatId, `❌ Ошибка AI: ${e.message}`, { message_thread_id: threadId || undefined });
+      }
       return;
     }
 
@@ -1253,7 +1314,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.8.0",
+          version: "1.8.3",
         }),
         {
           headers: { "Content-Type": "application/json" },
