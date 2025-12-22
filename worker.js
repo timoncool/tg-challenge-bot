@@ -672,11 +672,11 @@ async function handleMessage(update, env, config, tg, storage) {
     // Get topic ID - для настройки
     if (command === "/topic_id" && isAdmin) {
       const topicInfo = threadId
-        ? `ID темы: \`${threadId}\`\n\nКоманды: /set_daily, /set_weekly, /set_monthly, /set_winners`
+        ? `ID темы: <code>${threadId}</code>\n\nКоманды: /set_daily, /set_weekly, /set_monthly, /set_winners`
         : "Это общий чат. Напиши команду внутри темы форума.";
       await tg.sendMessage(chatId, topicInfo, {
         message_thread_id: threadId || undefined,
-        parse_mode: "Markdown",
+        parse_mode: "HTML",
       });
       return;
     }
@@ -741,31 +741,31 @@ async function handleMessage(update, env, config, tg, storage) {
     if (command === "/admin" && isAdmin) {
       await tg.sendMessage(
         chatId,
-        `*Админ-панель*
+        `<b>Админ-панель</b>
 
-*Опросы*
+<b>Опросы</b>
 /poll_daily — создать опрос дня
 /poll_weekly — создать опрос недели
 /poll_monthly — создать опрос месяца
 
-*Запуск*
+<b>Запуск</b>
 /run_daily — запустить дневной
 /run_weekly — запустить недельный
 /run_monthly — запустить месячный
 
-*Завершение*
+<b>Завершение</b>
 /finish_daily — завершить дневной
 /finish_weekly — завершить недельный
 /finish_monthly — завершить месячный
 
-*Статистика*
+<b>Статистика</b>
 /status — состояние челленджей
 /cs_daily, /cs_weekly, /cs_monthly
 /test_ai — проверить Gemini API
 
-*Настройка тем*
+<b>Настройка тем</b>
 /set_daily, /set_weekly, /set_monthly, /set_winners`,
-        { message_thread_id: threadId || undefined, parse_mode: "Markdown" }
+        { message_thread_id: threadId || undefined, parse_mode: "HTML" }
       );
       return;
     }
