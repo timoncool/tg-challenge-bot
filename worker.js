@@ -501,6 +501,8 @@ async function generateThemes(apiKey, type, language = "ru") {
   const prompt = prompts[type];
 
   try {
+    console.log("Gemini API request starting...", { type, hasApiKey: !!apiKey, keyLength: apiKey?.length });
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
       {
@@ -516,8 +518,28 @@ async function generateThemes(apiKey, type, language = "ru") {
       },
     );
 
+    console.log("Gemini API response status:", response.status, response.statusText);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Gemini API error response:", { status: response.status, body: errorText });
+      throw new Error(`API error: ${response.status} - ${errorText}`);
+    }
+
     const data = await response.json();
+    console.log("Gemini API response data:", JSON.stringify(data).substring(0, 500));
+
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+    if (!text) {
+      console.error("Gemini API empty response:", {
+        hasCandiates: !!data.candidates,
+        candidatesLength: data.candidates?.length,
+        error: data.error,
+        promptFeedback: data.promptFeedback
+      });
+    }
+
     // Parse lines in format "Short | Full"
     const themes = text
       .split("\n")
@@ -525,9 +547,13 @@ async function generateThemes(apiKey, type, language = "ru") {
       .filter((l) => l.includes("|") && l.length > 5)
       .slice(0, 6);
 
+    console.log("Gemini parsed themes:", themes.length);
+
     if (themes.length >= 6) return themes;
+
+    console.warn("Gemini returned less than 6 themes, using fallback", { themesCount: themes.length });
   } catch (e) {
-    console.error("AI error:", e);
+    console.error("Gemini AI error:", { message: e.message, stack: e.stack });
   }
 
   // Fallback themes in format "Short | Full"
@@ -768,13 +794,42 @@ ${formatChallenge(monthly, "• Месячный")}`;
     if (command === "/test_ai" && isAdmin) {
       await tg.sendMessage(chatId, "⏳ Тестирую Gemini API...", { message_thread_id: threadId || undefined });
       try {
-        const themes = await generateThemes(env.GEMINI_API_KEY, "daily");
-        const isGenerated = themes[0] !== "Кот-астронавт | Пушистый кот в скафандре чинит космический корабль среди звёзд";
-        const status = isGenerated ? "✅ AI работает!" : "⚠️ Используются заглушки (AI не ответил)";
-        const themesPreview = themes.slice(0, 3).map((t, i) => `${i + 1}. ${t}`).join("\n");
-        await tg.sendMessage(chatId, `${status}\n\nПримеры тем:\n${themesPreview}`, { message_thread_id: threadId || undefined });
+        // Direct API call to see raw response
+        const testPrompt = "Придумай 3 темы для арт-челленджа. Формат: Название | Описание";
+        const apiKey = env.GEMINI_API_KEY;
+
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey,
+            },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: testPrompt }] }],
+              generationConfig: { temperature: 1.0, maxOutputTokens: 300 },
+            }),
+          },
+        );
+
+        const status = response.status;
+        const data = await response.json();
+
+        let msg = `📡 API Status: ${status}\n\n`;
+
+        if (data.error) {
+          msg += `❌ Ошибка: ${data.error.message || JSON.stringify(data.error)}`;
+        } else if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+          const text = data.candidates[0].content.parts[0].text;
+          msg += `✅ AI ответил:\n\n${text.substring(0, 500)}`;
+        } else {
+          msg += `⚠️ Пустой ответ:\n${JSON.stringify(data).substring(0, 400)}`;
+        }
+
+        await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
       } catch (e) {
-        await tg.sendMessage(chatId, `❌ Ошибка AI: ${e.message}`, { message_thread_id: threadId || undefined });
+        await tg.sendMessage(chatId, `❌ Ошибка: ${e.message}`, { message_thread_id: threadId || undefined });
       }
       return;
     }
@@ -1314,7 +1369,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.8.3",
+          version: "1.8.4",
         }),
         {
           headers: { "Content-Type": "application/json" },
