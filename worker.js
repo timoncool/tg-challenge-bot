@@ -1135,8 +1135,9 @@ ${previousThemesNote}
 
     if (themes.length >= 6) return themes;
 
-    // Не хватает тем - выбрасываем ошибку, чтобы было видно что AI не работает
-    throw new Error(`AI вернул только ${themes.length} тем вместо 6. Проверьте API ключ и промпт.`);
+    // Не хватает тем - выбрасываем ошибку с деталями
+    const rawPreview = text ? text.substring(0, 200) : "(пустой ответ)";
+    throw new Error(`AI вернул ${themes.length} тем вместо 6. Ответ API: ${rawPreview}`);
   } catch (e) {
     console.error("Gemini AI error:", { message: e.message, stack: e.stack });
     throw e; // Пробрасываем ошибку наверх - никаких заглушек
