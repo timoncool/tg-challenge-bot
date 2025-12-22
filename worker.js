@@ -48,20 +48,26 @@ const ru = {
     const labels = { daily: "дневных", weekly: "недельных", monthly: "месячных" };
     return `🏆 ТОП-10 победителей ${labels[type]} челленджей:`;
   },
-  helpMessage: `🤖 Бот для челленджей
+  helpMessage: `🤖 Бот для нейро-арт челленджей
 
 📋 Как участвовать:
-1. Дождитесь объявления темы
-2. Отправьте изображение в тему челленджа
-3. Ставьте реакции работам других участников
-4. Побеждает работа с наибольшим числом реакций
+1. Дождитесь объявления темы челленджа
+2. Отправьте изображение в соответствующую тему
+3. Бот подтвердит получение работы ✅
+4. Ставьте реакции работам других участников
+5. Побеждает работа с наибольшим числом реакций
+
+⏰ Расписание:
+• Дневные: каждый день в 17:00
+• Недельные: каждое воскресенье в 17:00
+• Месячные: 1-го числа в 17:00
 
 ⚠️ Реакция 🌚 не учитывается
 
 📊 Команды:
-/stats — ваша статистика
-/leaderboard — топ победителей
-/current — текущие челленджи
+/current — текущие активные челленджи
+/stats — ваша статистика побед
+/leaderboard [daily|weekly|monthly] — топ победителей
 /help — эта справка`,
 };
 
@@ -93,28 +99,84 @@ class TelegramAPI {
     this.baseUrl = `https://api.telegram.org/bot${token}`;
   }
 
-  async request(method, params = {}) {
-    const response = await fetch(`${this.baseUrl}/${method}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-    });
-    const data = await response.json();
-    if (!data.ok) {
-      console.error(`Telegram API error: ${method}`, data);
-      throw new Error(data.description || "Telegram API error");
+  async request(method, params = {}, retries = 3) {
+    let lastError;
+
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const response = await fetch(`${this.baseUrl}/${method}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(params),
+        });
+
+        const data = await response.json();
+
+        if (!data.ok) {
+          const errorCode = data.error_code;
+          const description = data.description || "Telegram API error";
+
+          // Don't retry client errors (400-499 except 429)
+          if (errorCode >= 400 && errorCode < 500 && errorCode !== 429) {
+            console.error(`Telegram API error: ${method}`, { code: errorCode, description });
+            throw new Error(`[${errorCode}] ${description}`);
+          }
+
+          // Rate limited - wait and retry
+          if (errorCode === 429) {
+            const retryAfter = data.parameters?.retry_after || 1;
+            console.warn(`Rate limited, waiting ${retryAfter}s...`);
+            await new Promise((r) => setTimeout(r, retryAfter * 1000));
+            continue;
+          }
+
+          throw new Error(description);
+        }
+
+        return data.result;
+      } catch (e) {
+        lastError = e;
+        if (attempt < retries - 1) {
+          const delay = Math.pow(2, attempt) * 1000;
+          console.warn(`Telegram API retry ${attempt + 1}/${retries} for ${method}`);
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
     }
-    return data.result;
+
+    console.error(`Telegram API failed after ${retries} attempts: ${method}`, lastError);
+    throw lastError;
   }
 
   async sendMessage(chatId, text, options = {}) {
+    // Truncate if too long (Telegram limit 4096)
+    if (text.length > 4096) {
+      console.warn(`Message too long (${text.length}), truncating`);
+      text = text.substring(0, 4093) + "...";
+    }
     return this.request("sendMessage", { chat_id: chatId, text, ...options });
   }
 
   async sendPoll(chatId, question, options, params = {}) {
+    // Validate poll options (max 10, each max 100 bytes)
+    if (options.length > 10) {
+      console.warn(`Too many poll options (${options.length}), truncating to 10`);
+      options = options.slice(0, 10);
+    }
+    options = options.map((opt) => {
+      if (new TextEncoder().encode(opt).length > 100) {
+        let truncated = opt;
+        while (new TextEncoder().encode(truncated).length > 97) {
+          truncated = truncated.slice(0, -1);
+        }
+        return truncated + "...";
+      }
+      return opt;
+    });
+
     return this.request("sendPoll", {
       chat_id: chatId,
-      question,
+      question: question.substring(0, 300),
       options,
       ...params,
     });
@@ -133,11 +195,13 @@ class TelegramAPI {
     });
   }
 
-  async setWebhook(url) {
-    return this.request("setWebhook", {
+  async setWebhook(url, secret = null) {
+    const params = {
       url,
       allowed_updates: ["message", "message_reaction", "message_reaction_count", "poll", "poll_answer"],
-    });
+    };
+    if (secret) params.secret_token = secret;
+    return this.request("setWebhook", params);
   }
 }
 
@@ -259,17 +323,111 @@ class Storage {
 // ============================================
 
 async function generateThemes(apiKey, type, language = "ru") {
-  const complexity = {
-    daily: "простые, забавные, можно сделать за 5-10 минут",
-    weekly: "интересные, требующие креатива",
-    monthly: "сложные, амбициозные, настоящий вызов",
+  // Format: "Короткое название | Полное описание"
+  // Short name for poll (2-3 words), full description for announcement
+  const prompts = {
+    daily: `<role>
+Ты — креативный директор сообщества нейро-художников (2000+ участников), которые создают арт с помощью Midjourney, Stable Diffusion, DALL-E, Flux и других AI-инструментов.
+</role>
+
+<task>
+Придумай 6 тем для ЕЖЕДНЕВНОГО челленджа. Это лёгкие, весёлые темы на 5-15 минут генерации.
+</task>
+
+<requirements>
+- Каждая тема состоит из ДВУХ частей через разделитель " | ":
+  1. КОРОТКОЕ НАЗВАНИЕ (2-3 слова) — для голосования в опросе
+  2. ПОЛНОЕ ОПИСАНИЕ (1 предложение) — для объявления челленджа
+- Тема должна вдохновлять на ВИЗУАЛЬНЫЙ образ, который можно представить
+- Разнообразие стилей: реализм, фэнтези, абстракция, юмор, sci-fi, природа
+- Темы НЕ должны требовать сложных композиций
+- Избегай: политики, религии, насилия, NSFW
+- Язык: русский
+</requirements>
+
+<format>
+Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
+Короткое название | Полное описание
+</format>
+
+<examples>
+Кот-астронавт | Пушистый кот в скафандре чинит космический корабль среди звёзд
+Кофе Ван Гога | Дымящаяся чашка кофе на террасе с видом на горы в экспрессивном стиле Ван Гога
+Грибной лес | Волшебный ночной лес со светящимися грибами и мягким туманом
+Толстый супергерой | Упитанный кот в развевающемся плаще супергероя на крыше небоскрёба
+Ретро-будущее | Город в стиле ретрофутуризма 60-х с летающими машинами и неоновыми вывесками
+Подводный закат | Коралловый риф в лучах заходящего солнца, пробивающихся сквозь воду
+</examples>`,
+
+    weekly: `<role>
+Ты — креативный директор сообщества нейро-художников (2000+ участников), которые создают арт с помощью Midjourney, Stable Diffusion, DALL-E, Flux и других AI-инструментов.
+</role>
+
+<task>
+Придумай 6 тем для ЕЖЕНЕДЕЛЬНОГО челленджа. Это темы средней сложности, требующие экспериментов со стилями, композицией и деталями.
+</task>
+
+<requirements>
+- Каждая тема состоит из ДВУХ частей через разделитель " | ":
+  1. КОРОТКОЕ НАЗВАНИЕ (2-3 слова) — для голосования в опросе
+  2. ПОЛНОЕ ОПИСАНИЕ (1-2 предложения) — для объявления челленджа
+- Тема должна мотивировать на СЕРИЮ попыток и эксперименты
+- Разнообразие: сюжетные, атмосферные, стилизованные, концептуальные темы
+- Можно включать сложные сцены, несколько персонажей, необычные ракурсы
+- Избегай: политики, религии, насилия, NSFW
+- Язык: русский
+</requirements>
+
+<format>
+Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
+Короткое название | Полное описание
+</format>
+
+<examples>
+Забытый парк | Заброшенный парк аттракционов, медленно поглощаемый дикой природой — ржавые карусели обвиты плющом
+Цифровой распад | Портрет человека, чьё лицо распадается на пиксели, превращающиеся в стаю бабочек
+Ар-деко под водой | Затонувший город в стиле ар-деко, освещённый только биолюминесцентными существами
+Встреча эпох | Момент встречи средневекового рыцаря и киберпанк-самурая на перекрёстке времён
+Сны робота | Что видит во сне андроид — сюрреалистичный внутренний мир искусственного разума
+Последний день | Обычный городской пейзаж в последние мгновения перед чем-то невероятным
+</examples>`,
+
+    monthly: `<role>
+Ты — креативный директор сообщества нейро-художников (2000+ участников), которые создают арт с помощью Midjourney, Stable Diffusion, DALL-E, Flux и других AI-инструментов.
+</role>
+
+<task>
+Придумай 6 тем для ЕЖЕМЕСЯЧНОГО челленджа. Это АМБИЦИОЗНЫЕ темы, настоящий вызов мастерству — сложные концепции, нестандартные идеи, темы которые заставляют думать и экспериментировать неделями.
+</task>
+
+<requirements>
+- Каждая тема состоит из ДВУХ частей через разделитель " | ":
+  1. КОРОТКОЕ НАЗВАНИЕ (2-3 слова) — для голосования в опросе
+  2. ПОЛНОЕ ОПИСАНИЕ (2-3 предложения) — для объявления челленджа, раскрывающее глубину концепции
+- Тема должна быть ГЛУБОКОЙ — философской, концептуальной или технически сложной
+- Тема должна допускать МНОЖЕСТВО интерпретаций
+- Приветствуются: метафоры, парадоксы, смешение несовместимого
+- Это должна быть тема для портфолио
+- Избегай: политики, религии, насилия, NSFW
+- Язык: русский
+</requirements>
+
+<format>
+Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
+Короткое название | Полное описание
+</format>
+
+<examples>
+Последний сон ИИ | Что видит искусственный интеллект в последние миллисекунды перед отключением? Визуализация угасающего цифрового сознания — фрагменты данных, образы из обучения, страх или покой?
+Город памяти | Метрополис, построенный из человеческих воспоминаний. Каждое здание — чья-то история, каждая улица — чья-то жизнь. Светлые районы счастья и тёмные кварталы травм.
+Видимая музыка | Как выглядит симфония, если её можно увидеть? Визуализация музыкального произведения — от первых нот до финального аккорда — в одном изображении.
+Эволюция красоты | Один и тот же объект глазами разных эпох человечества. Как менялось восприятие красоты от пещерных людей до нас и далее в будущее.
+Изнанка реальности | Что находится за пределами видимого мира? Момент, когда реальность даёт трещину и сквозь неё проглядывает нечто иное — код? хаос? истина?
+Эмпатия машины | Момент, когда робот впервые испытывает эмоцию. Что это за эмоция? Как она выглядит изнутри механического существа?
+</examples>`
   };
 
-  const prompt = `Ты помогаешь сообществу нейро-арт генерации.
-Придумай 4 уникальных темы для ${type === "daily" ? "ежедневного" : type === "weekly" ? "еженедельного" : "ежемесячного"} челленджа.
-Сложность: ${complexity[type]}.
-Темы должны быть КОНКРЕТНЫМИ и вдохновляющими для AI-арта.
-Ответь ТОЛЬКО списком из 4 тем, по одной на строку, без нумерации.`;
+  const prompt = prompts[type];
 
   try {
     const response = await fetch(
@@ -286,20 +444,54 @@ async function generateThemes(apiKey, type, language = "ru") {
 
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const themes = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 5).slice(0, 4);
+    // Parse lines in format "Short | Full"
+    const themes = text.split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.includes("|") && l.length > 5)
+      .slice(0, 6);
 
-    if (themes.length >= 4) return themes;
+    if (themes.length >= 6) return themes;
   } catch (e) {
     console.error("AI error:", e);
   }
 
-  // Fallback themes
+  // Fallback themes in format "Short | Full"
   const fallbacks = {
-    daily: ["Уютная кофейня в дождливый день", "Космический кот-путешественник", "Волшебный лес с светящимися грибами", "Ретро-футуристический город"],
-    weekly: ["Подводный мир глазами рыбы", "Заброшенная космическая станция", "Сюрреалистичный натюрморт", "Киберпанк-версия сказки"],
-    monthly: ["Эпическая битва стихий", "Параллельная вселенная", "Симбиоз природы и технологий", "Мир глазами ИИ"],
+    daily: [
+      "Кот-астронавт | Пушистый кот в скафандре чинит космический корабль среди звёзд",
+      "Кофе Ван Гога | Дымящаяся чашка кофе на террасе с видом на горы в экспрессивном стиле Ван Гога",
+      "Грибной лес | Волшебный ночной лес со светящимися грибами и мягким туманом",
+      "Толстый супергерой | Упитанный кот в развевающемся плаще супергероя на крыше небоскрёба",
+      "Ретро-будущее | Город в стиле ретрофутуризма 60-х с летающими машинами и неоновыми вывесками",
+      "Подводный закат | Коралловый риф в лучах заходящего солнца, пробивающихся сквозь воду",
+    ],
+    weekly: [
+      "Забытый парк | Заброшенный парк аттракционов, медленно поглощаемый дикой природой",
+      "Цифровой распад | Портрет человека, чьё лицо распадается на пиксели и бабочки",
+      "Ар-деко под водой | Затонувший город в стиле ар-деко, освещённый биолюминесценцией",
+      "Встреча эпох | Момент встречи средневекового рыцаря и киберпанк-самурая",
+      "Сны робота | Сюрреалистичный внутренний мир искусственного разума",
+      "Последний день | Обычный городской пейзаж в последние мгновения перед чем-то невероятным",
+    ],
+    monthly: [
+      "Последний сон ИИ | Что видит искусственный интеллект в последние миллисекунды перед отключением",
+      "Город памяти | Метрополис, построенный из человеческих воспоминаний — каждое здание чья-то история",
+      "Видимая музыка | Как выглядит симфония, если её можно увидеть — от первых нот до финального аккорда",
+      "Эволюция красоты | Один объект глазами разных эпох — от пещерных людей до далёкого будущего",
+      "Изнанка реальности | Момент, когда реальность даёт трещину и сквозь неё проглядывает нечто иное",
+      "Эмпатия машины | Момент, когда робот впервые испытывает эмоцию",
+    ],
   };
   return fallbacks[type];
+}
+
+// Helper to parse theme format "Short | Full"
+function parseTheme(themeStr) {
+  const parts = themeStr.split("|").map(s => s.trim());
+  return {
+    short: parts[0] || themeStr,
+    full: parts[1] || parts[0] || themeStr,
+  };
 }
 
 // ============================================
@@ -338,18 +530,42 @@ async function handleMessage(update, env, config, tg, storage) {
   }
 
   if (text.startsWith("/leaderboard")) {
-    const leaderboard = await storage.getLeaderboard("daily");
+    // Parse type: /leaderboard weekly, /leaderboard monthly, etc.
+    const args = text.trim().split(/\s+/);
+    const typeMap = {
+      daily: "daily", weekly: "weekly", monthly: "monthly",
+      дневной: "daily", недельный: "weekly", месячный: "monthly",
+      день: "daily", неделя: "weekly", месяц: "monthly",
+    };
+    const type = typeMap[args[1]?.toLowerCase()] || "daily";
+
+    const leaderboard = await storage.getLeaderboard(type);
     if (leaderboard.length === 0) {
-      await tg.sendMessage(chatId, "🏆 Рейтинг пока пуст!", { message_thread_id: threadId || undefined });
+      await tg.sendMessage(
+        chatId,
+        `🏆 Рейтинг ${ru.challengeTypes[type]} пока пуст!\n\nУчаствуйте в челленджах и станьте первым победителем! ⭐`,
+        { message_thread_id: threadId || undefined }
+      );
       return;
     }
 
     const medals = ["🥇", "🥈", "🥉"];
-    let msg = ru.leaderboardTitle("daily") + "\n\n";
+    let msg = ru.leaderboardTitle(type) + `\n📊 Всего участников: ${leaderboard.length}\n\n`;
     leaderboard.slice(0, 10).forEach((e, i) => {
       const medal = medals[i] || `${i + 1}.`;
       msg += `${medal} ${e.username || `User ${e.userId}`} — ${e.wins} 🏆\n`;
     });
+
+    // Show user's position if not in top 10
+    const userId = message.from?.id;
+    if (userId) {
+      const userIndex = leaderboard.findIndex((e) => e.userId === userId);
+      if (userIndex >= 10) {
+        msg += `\n📍 Ваше место: #${userIndex + 1} — ${leaderboard[userIndex].wins} 🏆`;
+      }
+    }
+
+    msg += `\n\n💡 /leaderboard [daily|weekly|monthly]`;
 
     await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
     return;
@@ -379,11 +595,37 @@ async function handleMessage(update, env, config, tg, storage) {
     if (chatId !== config.chatId) return;
 
     const challengeType = await storage.isActiveTopic(threadId);
-    if (!challengeType) return;
+    if (!challengeType) {
+      // Not a challenge topic - silently ignore
+      return;
+    }
 
     const challenge = await storage.getChallenge(challengeType);
-    if (!challenge || challenge.status !== "active") return;
-    if (Date.now() > challenge.endsAt) return;
+    if (!challenge || challenge.status !== "active") {
+      await tg.sendMessage(chatId, "⚠️ Сейчас нет активного челленджа в этой теме.", {
+        message_thread_id: threadId || undefined,
+        reply_to_message_id: message.message_id,
+      });
+      return;
+    }
+
+    if (Date.now() > challenge.endsAt) {
+      await tg.sendMessage(chatId, "⏰ Время челленджа истекло! Дождитесь следующего.", {
+        message_thread_id: threadId || undefined,
+        reply_to_message_id: message.message_id,
+      });
+      return;
+    }
+
+    // Check for duplicate
+    const submissions = await storage.getSubmissions(challengeType, challenge.id);
+    if (submissions.some((s) => s.userId === message.from?.id)) {
+      await tg.sendMessage(chatId, "⚠️ Вы уже отправили работу в этот челлендж!", {
+        message_thread_id: threadId || undefined,
+        reply_to_message_id: message.message_id,
+      });
+      return;
+    }
 
     await storage.addSubmission(challengeType, challenge.id, {
       messageId: message.message_id,
@@ -391,6 +633,12 @@ async function handleMessage(update, env, config, tg, storage) {
       username: message.from?.username || message.from?.first_name,
       score: 0,
       timestamp: Date.now(),
+    });
+
+    // Confirmation message
+    await tg.sendMessage(chatId, "✅ Ваша работа принята! Удачи! 🍀", {
+      message_thread_id: threadId || undefined,
+      reply_to_message_id: message.message_id,
     });
 
     console.log(`Submission: user=${message.from?.id}, msg=${message.message_id}`);
@@ -428,9 +676,12 @@ async function generatePoll(env, config, tg, storage, type) {
   if (existing) return;
 
   const topicId = config.topics[type];
-  const themes = await generateThemes(env.GEMINI_API_KEY, type);
+  const themesRaw = await generateThemes(env.GEMINI_API_KEY, type);
 
-  const poll = await tg.sendPoll(config.chatId, ru.pollQuestion(type), themes, {
+  // Extract short names for poll, keep full strings for storage
+  const shortNames = themesRaw.map(t => parseTheme(t).short);
+
+  const poll = await tg.sendPoll(config.chatId, ru.pollQuestion(type), shortNames, {
     message_thread_id: topicId || undefined,
     is_anonymous: false,
     allows_multiple_answers: false,
@@ -440,7 +691,7 @@ async function generatePoll(env, config, tg, storage, type) {
     type,
     pollId: poll.poll.id,
     messageId: poll.message_id,
-    options: themes,
+    options: themesRaw, // Store full "short | full" strings
     createdAt: Date.now(),
     topicThreadId: topicId,
   });
@@ -498,20 +749,38 @@ async function startChallenge(env, config, tg, storage, type) {
   await finishChallenge(env, config, tg, storage, type);
 
   const poll = await storage.getPoll(type);
-  let theme = "Свободная тема";
+  let shortTheme = "Свободная тема";
+  let fullTheme = "Свободная тема — создайте что угодно, дайте волю фантазии!";
 
   if (poll) {
     try {
       const stopped = await tg.stopPoll(config.chatId, poll.messageId);
       let maxVotes = 0;
+      let winnerShort = "";
+
+      // Find winner by short name (that's what's in poll options)
       for (const opt of stopped.options) {
         if (opt.voter_count > maxVotes) {
           maxVotes = opt.voter_count;
-          theme = opt.text;
+          winnerShort = opt.text;
         }
       }
+
+      // Find matching full theme from stored options
+      const matchingFull = poll.options.find(o => parseTheme(o).short === winnerShort);
+      if (matchingFull) {
+        const parsed = parseTheme(matchingFull);
+        shortTheme = parsed.short;
+        fullTheme = parsed.full;
+      } else {
+        shortTheme = winnerShort;
+        fullTheme = winnerShort;
+      }
     } catch (e) {
-      theme = poll.options[0];
+      // Fallback to first option
+      const parsed = parseTheme(poll.options[0]);
+      shortTheme = parsed.short;
+      fullTheme = parsed.full;
     }
     await storage.deletePoll(type);
   }
@@ -525,14 +794,17 @@ async function startChallenge(env, config, tg, storage, type) {
 
   const challengeId = await storage.getNextChallengeId(type);
 
-  const announcement = await tg.sendMessage(config.chatId, ru.challengeAnnouncement(type, theme, endTimeStr), {
+  // Use full description in announcement
+  const announcement = await tg.sendMessage(config.chatId, ru.challengeAnnouncement(type, fullTheme, endTimeStr), {
     message_thread_id: topicId || undefined,
   });
 
+  // Store short theme for leaderboard/stats display
   await storage.saveChallenge({
     id: challengeId,
     type,
-    topic: theme,
+    topic: shortTheme,
+    topicFull: fullTheme,
     status: "active",
     startedAt: Date.now(),
     endsAt,
@@ -544,7 +816,7 @@ async function startChallenge(env, config, tg, storage, type) {
   activeTopics[topicId] = type;
   await storage.setActiveTopics(activeTopics);
 
-  console.log(`Challenge started: ${type} #${challengeId} - "${theme}"`);
+  console.log(`Challenge started: ${type} #${challengeId} - "${shortTheme}"`);
 }
 
 async function handleCron(env, config, tg, storage, cron) {
@@ -585,23 +857,56 @@ export default {
 
     // Health check
     if (url.pathname === "/" || url.pathname === "/health") {
-      return new Response(JSON.stringify({ status: "ok", bot: "TG Challenge Bot" }), {
+      return new Response(JSON.stringify({ status: "ok", bot: "TG Challenge Bot", version: "1.1.0" }), {
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    // Setup webhook
+    // Setup webhook (protected with ADMIN_SECRET)
     if (url.pathname === "/setup") {
-      const tg = new TelegramAPI(env.BOT_TOKEN);
-      const webhookUrl = `${url.origin}/webhook`;
-      await tg.setWebhook(webhookUrl);
-      return new Response(JSON.stringify({ success: true, webhook: webhookUrl }), {
-        headers: { "Content-Type": "application/json" },
-      });
+      try {
+        // Check authorization
+        const authHeader = request.headers.get("Authorization");
+        if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        if (!env.BOT_TOKEN) {
+          return new Response(JSON.stringify({ error: "BOT_TOKEN not configured" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        const webhookUrl = `${url.origin}/webhook`;
+        await tg.setWebhook(webhookUrl, env.WEBHOOK_SECRET || null);
+
+        return new Response(JSON.stringify({ success: true, webhook: webhookUrl }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        console.error("Setup error:", e);
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
     }
 
-    // Info
+    // Info (protected with ADMIN_SECRET)
     if (url.pathname === "/info") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
       const config = getConfig(env);
       return new Response(JSON.stringify({
         configured: !!env.BOT_TOKEN,
@@ -612,6 +917,14 @@ export default {
 
     // Webhook
     if (url.pathname === "/webhook" && request.method === "POST") {
+      // Verify webhook secret if configured
+      if (env.WEBHOOK_SECRET) {
+        const secretHeader = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
+        if (secretHeader !== env.WEBHOOK_SECRET) {
+          return new Response("Forbidden", { status: 403 });
+        }
+      }
+
       try {
         const update = await request.json();
         const config = getConfig(env);
@@ -624,7 +937,10 @@ export default {
           await handleReactionCount(update, env, config, storage);
         }
       } catch (e) {
-        console.error("Webhook error:", e);
+        console.error("Webhook error:", {
+          error: e.message,
+          stack: e.stack,
+        });
       }
 
       return new Response("OK");
@@ -634,12 +950,24 @@ export default {
   },
 
   async scheduled(event, env) {
-    if (!env.BOT_TOKEN || !env.CHAT_ID) return;
+    try {
+      if (!env.BOT_TOKEN || !env.CHAT_ID) {
+        console.error("Scheduled job skipped: missing BOT_TOKEN or CHAT_ID");
+        return;
+      }
 
-    const config = getConfig(env);
-    const tg = new TelegramAPI(env.BOT_TOKEN);
-    const storage = new Storage(env.CHALLENGE_KV);
+      const config = getConfig(env);
+      const tg = new TelegramAPI(env.BOT_TOKEN);
+      const storage = new Storage(env.CHALLENGE_KV);
 
-    await handleCron(env, config, tg, storage, event.cron);
+      await handleCron(env, config, tg, storage, event.cron);
+    } catch (e) {
+      console.error("Scheduled job error:", {
+        error: e.message,
+        stack: e.stack,
+        cron: event.cron,
+        scheduledTime: event.scheduledTime,
+      });
+    }
   },
 };
