@@ -247,6 +247,19 @@ class TelegramAPI {
     });
   }
 
+  async getChatMember(chatId, userId) {
+    return this.request("getChatMember", { chat_id: chatId, user_id: userId });
+  }
+
+  async isUserAdmin(chatId, userId) {
+    try {
+      const member = await this.getChatMember(chatId, userId);
+      return member.status === "creator" || member.status === "administrator";
+    } catch {
+      return false;
+    }
+  }
+
   async setWebhook(url, secret = null) {
     const params = {
       url,
@@ -577,6 +590,128 @@ async function handleMessage(update, env, config, tg, storage) {
       await tg.sendMessage(chatId, ru.helpMessage, {
         message_thread_id: threadId || undefined,
       });
+      return;
+    }
+
+    // ============================================
+    // ADMIN COMMANDS (только для админов группы)
+    // ============================================
+    const isAdmin = config.chatId && message.from?.id
+      ? await tg.isUserAdmin(config.chatId, message.from.id)
+      : false;
+
+    if (text === "/admin" && isAdmin) {
+      await tg.sendMessage(
+        chatId,
+        `🔧 АДМИН-ПАНЕЛЬ
+
+📊 Опросы:
+/poll_daily — создать опрос дня
+/poll_weekly — создать опрос недели
+/poll_monthly — создать опрос месяца
+
+🚀 Запуск челленджей:
+/start_daily — запустить дневной
+/start_weekly — запустить недельный
+/start_monthly — запустить месячный
+
+🏁 Завершение:
+/finish_daily — завершить дневной
+/finish_weekly — завершить недельный
+/finish_monthly — завершить месячный
+
+📈 Статус:
+/status — текущее состояние всех челленджей`,
+        { message_thread_id: threadId || undefined }
+      );
+      return;
+    }
+
+    // Admin: Create polls
+    if (text === "/poll_daily" && isAdmin) {
+      await storage.deletePoll("daily");
+      await generatePoll(env, config, tg, storage, "daily");
+      await tg.sendMessage(chatId, "✅ Опрос дня создан!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/poll_weekly" && isAdmin) {
+      await storage.deletePoll("weekly");
+      await generatePoll(env, config, tg, storage, "weekly");
+      await tg.sendMessage(chatId, "✅ Опрос недели создан!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/poll_monthly" && isAdmin) {
+      await storage.deletePoll("monthly");
+      await generatePoll(env, config, tg, storage, "monthly");
+      await tg.sendMessage(chatId, "✅ Опрос месяца создан!", { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Start challenges
+    if (text === "/start_daily" && isAdmin) {
+      await startChallenge(env, config, tg, storage, "daily");
+      await tg.sendMessage(chatId, "✅ Дневной челлендж запущен!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/start_weekly" && isAdmin) {
+      await startChallenge(env, config, tg, storage, "weekly");
+      await tg.sendMessage(chatId, "✅ Недельный челлендж запущен!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/start_monthly" && isAdmin) {
+      await startChallenge(env, config, tg, storage, "monthly");
+      await tg.sendMessage(chatId, "✅ Месячный челлендж запущен!", { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Finish challenges
+    if (text === "/finish_daily" && isAdmin) {
+      await finishChallenge(env, config, tg, storage, "daily");
+      await tg.sendMessage(chatId, "✅ Дневной челлендж завершён!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/finish_weekly" && isAdmin) {
+      await finishChallenge(env, config, tg, storage, "weekly");
+      await tg.sendMessage(chatId, "✅ Недельный челлендж завершён!", { message_thread_id: threadId || undefined });
+      return;
+    }
+    if (text === "/finish_monthly" && isAdmin) {
+      await finishChallenge(env, config, tg, storage, "monthly");
+      await tg.sendMessage(chatId, "✅ Месячный челлендж завершён!", { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Status
+    if (text === "/status" && isAdmin) {
+      const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly] = await Promise.all([
+        storage.getChallenge("daily"),
+        storage.getChallenge("weekly"),
+        storage.getChallenge("monthly"),
+        storage.getPoll("daily"),
+        storage.getPoll("weekly"),
+        storage.getPoll("monthly"),
+      ]);
+
+      const formatChallenge = (c, name) => {
+        if (!c) return `${name}: ❌ нет`;
+        const status = c.status === "active" ? "🟢 активен" : "⚪ завершён";
+        const hours = c.status === "active" ? Math.max(0, Math.floor((c.endsAt - Date.now()) / 3600000)) : 0;
+        return `${name}: ${status}\n   Тема: "${c.topic}"\n   ${c.status === "active" ? `Осталось: ${hours}ч` : ""}`;
+      };
+
+      const statusMsg = `📊 СТАТУС СИСТЕМЫ
+
+🗳️ Опросы:
+• Дневной: ${pollDaily ? "✅ есть" : "❌ нет"}
+• Недельный: ${pollWeekly ? "✅ есть" : "❌ нет"}
+• Месячный: ${pollMonthly ? "✅ есть" : "❌ нет"}
+
+🎯 Челленджи:
+${formatChallenge(daily, "• Дневной")}
+${formatChallenge(weekly, "• Недельный")}
+${formatChallenge(monthly, "• Месячный")}`;
+
+      await tg.sendMessage(chatId, statusMsg, { message_thread_id: threadId || undefined });
       return;
     }
 
@@ -1062,7 +1197,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.4.0",
+          version: "1.7.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
@@ -1104,6 +1239,157 @@ export default {
         );
       } catch (e) {
         console.error("Setup error:", e);
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // ============================================
+    // ADMIN ENDPOINTS (для тестирования)
+    // ============================================
+
+    // POST /admin/poll/daily|weekly|monthly - создать опрос
+    if (url.pathname.startsWith("/admin/poll/") && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const type = url.pathname.split("/").pop();
+      if (!["daily", "weekly", "monthly"].includes(type)) {
+        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const config = getConfig(env);
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        const storage = new Storage(env.CHALLENGE_KV);
+
+        // Delete existing poll if any
+        await storage.deletePoll(type);
+        await generatePoll(env, config, tg, storage, type);
+
+        return new Response(JSON.stringify({ success: true, action: "poll", type }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // POST /admin/start/daily|weekly|monthly - запустить челлендж
+    if (url.pathname.startsWith("/admin/start/") && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const type = url.pathname.split("/").pop();
+      if (!["daily", "weekly", "monthly"].includes(type)) {
+        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const config = getConfig(env);
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        const storage = new Storage(env.CHALLENGE_KV);
+
+        await startChallenge(env, config, tg, storage, type);
+
+        return new Response(JSON.stringify({ success: true, action: "start", type }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // POST /admin/finish/daily|weekly|monthly - завершить челлендж
+    if (url.pathname.startsWith("/admin/finish/") && request.method === "POST") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const type = url.pathname.split("/").pop();
+      if (!["daily", "weekly", "monthly"].includes(type)) {
+        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const config = getConfig(env);
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        const storage = new Storage(env.CHALLENGE_KV);
+
+        await finishChallenge(env, config, tg, storage, type);
+
+        return new Response(JSON.stringify({ success: true, action: "finish", type }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // GET /admin/status - посмотреть текущее состояние
+    if (url.pathname === "/admin/status") {
+      const authHeader = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      try {
+        const storage = new Storage(env.CHALLENGE_KV);
+        const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly, activeTopics] = await Promise.all([
+          storage.getChallenge("daily"),
+          storage.getChallenge("weekly"),
+          storage.getChallenge("monthly"),
+          storage.getPoll("daily"),
+          storage.getPoll("weekly"),
+          storage.getPoll("monthly"),
+          storage.getActiveTopics(),
+        ]);
+
+        return new Response(JSON.stringify({
+          challenges: { daily, weekly, monthly },
+          polls: { daily: !!pollDaily, weekly: !!pollWeekly, monthly: !!pollMonthly },
+          activeTopics,
+        }, null, 2), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
