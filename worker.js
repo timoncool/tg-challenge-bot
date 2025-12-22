@@ -247,6 +247,19 @@ class TelegramAPI {
     });
   }
 
+  async getChatMember(chatId, userId) {
+    return this.request("getChatMember", { chat_id: chatId, user_id: userId });
+  }
+
+  async isUserAdmin(chatId, userId) {
+    try {
+      const member = await this.getChatMember(chatId, userId);
+      return member.status === "creator" || member.status === "administrator";
+    } catch {
+      return false;
+    }
+  }
+
   async setWebhook(url, secret = null) {
     const params = {
       url,
@@ -581,10 +594,11 @@ async function handleMessage(update, env, config, tg, storage) {
     }
 
     // ============================================
-    // ADMIN COMMANDS (только для админа)
+    // ADMIN COMMANDS (только для админов группы)
     // ============================================
-    const adminId = parseInt(env.ADMIN_USER_ID, 10) || 0;
-    const isAdmin = adminId && message.from?.id === adminId;
+    const isAdmin = config.chatId && message.from?.id
+      ? await tg.isUserAdmin(config.chatId, message.from.id)
+      : false;
 
     if (text === "/admin" && isAdmin) {
       await tg.sendMessage(
@@ -1183,7 +1197,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.6.0",
+          version: "1.7.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
