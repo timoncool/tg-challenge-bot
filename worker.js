@@ -1639,6 +1639,7 @@ async function handleReaction(update, env, config, storage) {
     // Find which challenge this message belongs to by checking all active challenges
     let challengeType = null;
     let challenge = null;
+    let submission = null;
 
     for (const type of ["daily", "weekly", "monthly"]) {
       const ch = await storage.getChallenge(type);
@@ -1649,6 +1650,7 @@ async function handleReaction(update, env, config, storage) {
         if (found) {
           challengeType = type;
           challenge = ch;
+          submission = found;
           break;
         }
       }
@@ -1659,19 +1661,29 @@ async function handleReaction(update, env, config, storage) {
       return;
     }
 
-    // Count valid reactions in new_reaction
-    let userScore = 0;
+    // Count only ONE unique reaction per user (ignore Premium multi-reactions)
+    // Check if user has at least one valid reaction
+    let hasValidReaction = false;
     for (const r of reaction.new_reaction || []) {
       if (r.type === "emoji" && r.emoji !== EXCLUDED_EMOJI) {
-        userScore += 1;
+        hasValidReaction = true;
+        break;
       } else if (r.type === "custom_emoji" || r.type === "paid") {
-        userScore += 1;
+        hasValidReaction = true;
+        break;
       }
     }
+    const userScore = hasValidReaction ? 1 : 0;
 
     // Store this user's reaction count for this message
     const userId = reaction.user?.id;
     if (!userId) return;
+
+    // Ignore self-reactions (user reacting to their own post)
+    if (submission && userId === submission.userId) {
+      console.log("Reaction ignored: self-reaction", { userId, messageId: reaction.message_id });
+      return;
+    }
 
     const reactionsKey = `reactions:${challengeType}:${challenge.id}:${reaction.message_id}`;
     const reactionsMap = (await storage.get(reactionsKey)) || {};
