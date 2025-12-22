@@ -1,10 +1,13 @@
 // ============================================
-// TG CHALLENGE BOT - Single File Version
-// Просто скопируй этот код в Cloudflare Dashboard
+// TG CHALLENGE BOT - Multi-Community Version
+// Поддержка до 10 сообществ в одном воркере
 // ============================================
 
 // Эмодзи-исключение (негативная реакция)
 const EXCLUDED_EMOJI = "🌚";
+
+// Максимальное количество сообществ
+const MAX_COMMUNITIES = 10;
 
 // Режимы контента для генерации тем
 const CONTENT_MODES = {
@@ -117,36 +120,175 @@ ${username} — ${score} реакций
 };
 
 // ============================================
-// КОНФИГУРАЦИЯ
+// КОНФИГУРАЦИЯ (MULTI-COMMUNITY)
 // ============================================
 
-function getConfig(env) {
+// Глобальные настройки из env (не привязаны к сообществу)
+function getGlobalConfig(env) {
   return {
-    chatId: parseInt(env.CHAT_ID, 10) || 0,
+    timezoneOffset: parseInt(env.TIMEZONE_OFFSET, 10) || 0,
+    language: env.BOT_LANGUAGE || "ru",
+  };
+}
+
+// ============================================
+// УПРАВЛЕНИЕ СООБЩЕСТВАМИ
+// ============================================
+
+// Получить список всех зарегистрированных сообществ
+async function getCommunities(storage) {
+  return (await storage.get("communities:list")) || {};
+}
+
+// Проверить, зарегистрировано ли сообщество
+async function isCommunityRegistered(storage, chatId) {
+  const communities = await getCommunities(storage);
+  return !!communities[String(chatId)];
+}
+
+// Добавить сообщество
+async function addCommunity(storage, chatId, name = null) {
+  const communities = await getCommunities(storage);
+  const count = Object.keys(communities).length;
+
+  if (count >= MAX_COMMUNITIES) {
+    return { success: false, error: `Достигнут лимит сообществ (${MAX_COMMUNITIES})` };
+  }
+
+  if (communities[String(chatId)]) {
+    return { success: false, error: "Сообщество уже зарегистрировано" };
+  }
+
+  communities[String(chatId)] = {
+    chatId: chatId,
+    name: name || `Community ${chatId}`,
+    addedAt: Date.now(),
+  };
+
+  await storage.set("communities:list", communities);
+  return { success: true, count: count + 1 };
+}
+
+// Удалить сообщество
+async function removeCommunity(storage, chatId) {
+  const communities = await getCommunities(storage);
+
+  if (!communities[String(chatId)]) {
+    return { success: false, error: "Сообщество не найдено" };
+  }
+
+  delete communities[String(chatId)];
+  await storage.set("communities:list", communities);
+  return { success: true };
+}
+
+// Получить конфиг для конкретного сообщества
+async function getCommunityConfig(storage, chatId) {
+  const communities = await getCommunities(storage);
+  const community = communities[String(chatId)];
+
+  if (!community) {
+    return null;
+  }
+
+  // Загружаем настройки топиков для этого сообщества
+  const topics = (await storage.get(`community:${chatId}:settings:topics`)) || {
+    daily: 0,
+    weekly: 0,
+    monthly: 0,
+    winners: 0,
+  };
+
+  return {
+    chatId: chatId,
+    name: community.name,
+    topics: topics,
+  };
+}
+
+// Обновить настройки топиков для сообщества
+async function setCommunityTopics(storage, chatId, topics) {
+  await storage.set(`community:${chatId}:settings:topics`, topics);
+}
+
+// Legacy: получить конфиг из env (для обратной совместимости)
+function getLegacyConfig(env) {
+  const chatId = parseInt(env.CHAT_ID, 10) || 0;
+  if (!chatId) return null;
+
+  return {
+    chatId: chatId,
     topics: {
       daily: parseInt(env.TOPIC_DAILY, 10) || 0,
       weekly: parseInt(env.TOPIC_WEEKLY, 10) || 0,
       monthly: parseInt(env.TOPIC_MONTHLY, 10) || 0,
       winners: parseInt(env.TOPIC_WINNERS, 10) || 0,
     },
-    timezoneOffset: parseInt(env.TIMEZONE_OFFSET, 10) || 0,
-    language: env.BOT_LANGUAGE || "ru",
   };
 }
 
-// Get config with KV overrides for topics
-async function getConfigWithTopics(env, storage) {
-  const base = getConfig(env);
-  const kvTopics = await storage.get("settings:topics");
-  if (kvTopics) {
-    base.topics = {
-      daily: kvTopics.daily || base.topics.daily,
-      weekly: kvTopics.weekly || base.topics.weekly,
-      monthly: kvTopics.monthly || base.topics.monthly,
-      winners: kvTopics.winners || base.topics.winners,
+// Получить конфиг для сообщества (с fallback на legacy env)
+async function getConfigForChat(env, storage, chatId) {
+  // Сначала пробуем KV
+  const communityConfig = await getCommunityConfig(storage, chatId);
+  if (communityConfig) {
+    return {
+      ...getGlobalConfig(env),
+      ...communityConfig,
     };
   }
-  return base;
+
+  // Fallback на legacy env config
+  const legacyConfig = getLegacyConfig(env);
+  if (legacyConfig && legacyConfig.chatId === chatId) {
+    return {
+      ...getGlobalConfig(env),
+      ...legacyConfig,
+    };
+  }
+
+  return null;
+}
+
+// Проверить доступ к сообществу (зарегистрировано или legacy)
+async function hasAccessToChat(env, storage, chatId) {
+  // Проверяем KV
+  if (await isCommunityRegistered(storage, chatId)) {
+    return true;
+  }
+
+  // Проверяем legacy env
+  const legacyConfig = getLegacyConfig(env);
+  if (legacyConfig && legacyConfig.chatId === chatId) {
+    return true;
+  }
+
+  return false;
+}
+
+// Получить все активные сообщества (для cron)
+async function getAllActiveCommunities(env, storage) {
+  const result = [];
+
+  // Добавляем из KV
+  const communities = await getCommunities(storage);
+  for (const chatId of Object.keys(communities)) {
+    const config = await getConfigForChat(env, storage, parseInt(chatId, 10));
+    if (config) {
+      result.push(config);
+    }
+  }
+
+  // Добавляем legacy если не дублируется
+  const legacyConfig = getLegacyConfig(env);
+  if (legacyConfig && legacyConfig.chatId && !communities[String(legacyConfig.chatId)]) {
+    result.push({
+      ...getGlobalConfig(env),
+      ...legacyConfig,
+    });
+  }
+
+  return result;
 }
 
 // Default schedule settings
@@ -156,14 +298,21 @@ const defaultSchedule = {
   monthly: { pollDay: 28, pollHour: 10, challengeDay: 1, challengeHour: 17 },
 };
 
-// Get schedule from KV or defaults
-async function getSchedule(storage) {
-  const kvSchedule = await storage.get("settings:schedule");
+// Get schedule from KV or defaults (per-community)
+async function getSchedule(storage, chatId = null) {
+  const key = chatId ? `community:${chatId}:settings:schedule` : "settings:schedule";
+  const kvSchedule = await storage.get(key);
   return {
     daily: { ...defaultSchedule.daily, ...kvSchedule?.daily },
     weekly: { ...defaultSchedule.weekly, ...kvSchedule?.weekly },
     monthly: { ...defaultSchedule.monthly, ...kvSchedule?.monthly },
   };
+}
+
+// Set schedule for community
+async function setSchedule(storage, chatId, schedule) {
+  const key = chatId ? `community:${chatId}:settings:schedule` : "settings:schedule";
+  await storage.set(key, schedule);
 }
 
 // Format schedule for display
@@ -377,70 +526,75 @@ class Storage {
     await this.kv.delete(key);
   }
 
-  // Challenge
-  async getChallenge(type) {
-    return this.get(`challenge:${type}`);
+  // Helper to build community-prefixed key
+  _key(chatId, ...parts) {
+    return `community:${chatId}:${parts.join(":")}`;
   }
 
-  async saveChallenge(challenge) {
-    await this.set(`challenge:${challenge.type}`, challenge);
+  // Challenge (per-community)
+  async getChallenge(chatId, type) {
+    return this.get(this._key(chatId, "challenge", type));
   }
 
-  async getNextChallengeId(type) {
+  async saveChallenge(chatId, challenge) {
+    await this.set(this._key(chatId, "challenge", challenge.type), challenge);
+  }
+
+  async getNextChallengeId(chatId, type) {
     // Use timestamp-based ID to avoid race conditions
-    // Format: YYYYMMDD + random suffix
+    // Format: YYYYMMDD + random suffix (chatId reserved for future per-community sequences)
     const now = new Date();
     const datePrefix = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
     const randomSuffix = Math.floor(Math.random() * 1000);
     return datePrefix * 1000 + randomSuffix;
   }
 
-  // Poll
-  async getPoll(type) {
-    return this.get(`poll:${type}`);
+  // Poll (per-community)
+  async getPoll(chatId, type) {
+    return this.get(this._key(chatId, "poll", type));
   }
 
-  async savePoll(poll) {
-    await this.set(`poll:${poll.type}`, poll);
+  async savePoll(chatId, poll) {
+    await this.set(this._key(chatId, "poll", poll.type), poll);
   }
 
-  async deletePoll(type) {
-    await this.delete(`poll:${type}`);
+  async deletePoll(chatId, type) {
+    await this.delete(this._key(chatId, "poll", type));
   }
 
-  // Submissions
-  async getSubmissions(type, challengeId) {
-    return (await this.get(`submissions:${type}:${challengeId}`)) || [];
+  // Submissions (per-community)
+  async getSubmissions(chatId, type, challengeId) {
+    return (await this.get(this._key(chatId, "submissions", type, challengeId))) || [];
   }
 
-  async addSubmission(type, challengeId, submission) {
-    const submissions = await this.getSubmissions(type, challengeId);
+  async addSubmission(chatId, type, challengeId, submission) {
+    const submissions = await this.getSubmissions(chatId, type, challengeId);
     // Check both messageId (duplicate request) and userId (one submission per user)
     if (submissions.some((s) => s.messageId === submission.messageId || s.userId === submission.userId)) {
       return false; // Already exists
     }
     submissions.push(submission);
-    await this.set(`submissions:${type}:${challengeId}`, submissions);
+    await this.set(this._key(chatId, "submissions", type, challengeId), submissions);
     return true; // Successfully added
   }
 
-  async updateSubmissionScore(type, challengeId, messageId, score) {
-    const submissions = await this.getSubmissions(type, challengeId);
+  async updateSubmissionScore(chatId, type, challengeId, messageId, score) {
+    const submissions = await this.getSubmissions(chatId, type, challengeId);
     const submission = submissions.find((s) => s.messageId === messageId);
     if (submission) {
       submission.score = score;
-      await this.set(`submissions:${type}:${challengeId}`, submissions);
+      await this.set(this._key(chatId, "submissions", type, challengeId), submissions);
     }
   }
 
-  // Leaderboard
-  async getLeaderboard(type) {
-    const map = (await this.get(`leaderboard:${type}`)) || {};
+  // Leaderboard (per-community)
+  async getLeaderboard(chatId, type) {
+    const map = (await this.get(this._key(chatId, "leaderboard", type))) || {};
     return Object.values(map).sort((a, b) => b.wins - a.wins);
   }
 
-  async addWin(type, userId, username) {
-    const map = (await this.get(`leaderboard:${type}`)) || {};
+  async addWin(chatId, type, userId, username) {
+    const map = (await this.get(this._key(chatId, "leaderboard", type))) || {};
     const key = String(userId);
     if (!map[key]) {
       map[key] = { userId, username, wins: 0 };
@@ -448,40 +602,58 @@ class Storage {
     map[key].wins += 1;
     map[key].lastWin = Date.now();
     if (username) map[key].username = username;
-    await this.set(`leaderboard:${type}`, map);
+    await this.set(this._key(chatId, "leaderboard", type), map);
   }
 
-  async getUserStats(type, userId) {
-    const leaderboard = await this.getLeaderboard(type);
+  async getUserStats(chatId, type, userId) {
+    const leaderboard = await this.getLeaderboard(chatId, type);
     const index = leaderboard.findIndex((e) => e.userId === userId);
     if (index === -1) return { wins: 0, rank: leaderboard.length + 1 };
     return { wins: leaderboard[index].wins, rank: index + 1 };
   }
 
-  // Active topics
-  async getActiveTopics() {
-    return (await this.get("active_topics")) || {};
+  // Active topics (per-community)
+  async getActiveTopics(chatId) {
+    return (await this.get(this._key(chatId, "active_topics"))) || {};
   }
 
-  async setActiveTopics(topics) {
-    await this.set("active_topics", topics);
+  async setActiveTopics(chatId, topics) {
+    await this.set(this._key(chatId, "active_topics"), topics);
   }
 
-  async isActiveTopic(threadId) {
-    const topics = await this.getActiveTopics();
+  async isActiveTopic(chatId, threadId) {
+    const topics = await this.getActiveTopics(chatId);
     return topics[threadId] || null;
   }
 
-  // Theme history (to avoid repetition)
-  async getThemeHistory(type) {
-    return (await this.get(`theme_history:${type}`)) || [];
+  // Theme history (per-community, to avoid repetition)
+  async getThemeHistory(chatId, type) {
+    return (await this.get(this._key(chatId, "theme_history", type))) || [];
   }
 
-  async addThemeToHistory(type, theme) {
-    const history = await this.getThemeHistory(type);
+  async addThemeToHistory(chatId, type, theme) {
+    const history = await this.getThemeHistory(chatId, type);
     history.unshift(theme);
     // Keep only last 10 themes
-    await this.set(`theme_history:${type}`, history.slice(0, 10));
+    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 10));
+  }
+
+  // Content mode (per-community)
+  async getContentMode(chatId) {
+    return (await this.get(this._key(chatId, "settings", "content_mode"))) || DEFAULT_CONTENT_MODE;
+  }
+
+  async setContentMode(chatId, mode) {
+    await this.set(this._key(chatId, "settings", "content_mode"), mode);
+  }
+
+  // Reactions (per-community)
+  async getReactions(chatId, challengeType, challengeId, messageId) {
+    return (await this.get(this._key(chatId, "reactions", challengeType, challengeId, messageId))) || {};
+  }
+
+  async setReactions(chatId, challengeType, challengeId, messageId, reactionsMap) {
+    await this.set(this._key(chatId, "reactions", challengeType, challengeId, messageId), reactionsMap);
   }
 }
 
@@ -1004,7 +1176,7 @@ function parseTheme(themeStr) {
 // HANDLERS
 // ============================================
 
-async function handleMessage(update, env, config, tg, storage) {
+async function handleMessage(update, env, tg, storage) {
   try {
     const message = update.message;
     if (!message) return;
@@ -1016,9 +1188,13 @@ async function handleMessage(update, env, config, tg, storage) {
     // Убираем @username из команды (в группах Telegram добавляет его)
     const command = text.split("@")[0].split(" ")[0].toLowerCase();
 
-    // Commands
+    // Проверяем, есть ли доступ к этому чату
+    const hasAccess = await hasAccessToChat(env, storage, chatId);
+    const config = hasAccess ? await getConfigForChat(env, storage, chatId) : null;
+
+    // Commands (работают везде)
     if (command === "/start" || command === "/help") {
-      const schedule = await getSchedule(storage);
+      const schedule = config ? await getSchedule(storage, chatId) : await getSchedule(storage);
       await tg.sendMessage(chatId, ru.helpMessage(schedule), {
         message_thread_id: threadId || undefined,
       });
@@ -1026,11 +1202,79 @@ async function handleMessage(update, env, config, tg, storage) {
     }
 
     // ============================================
-    // ADMIN COMMANDS (только для админов группы)
+    // SUPER ADMIN: Управление сообществами
     // ============================================
-    const isAdmin = config.chatId && message.from?.id
-      ? await tg.isUserAdmin(config.chatId, message.from.id)
+    const isAdmin = message.from?.id
+      ? await tg.isUserAdmin(chatId, message.from.id)
       : false;
+
+    // Регистрация сообщества: /register_community [название]
+    if (command === "/register_community" && isAdmin) {
+      const args = text.trim().split(/\s+/).slice(1);
+      const name = args.join(" ") || message.chat.title || `Community ${chatId}`;
+
+      const result = await addCommunity(storage, chatId, name);
+      if (result.success) {
+        await tg.sendMessage(chatId, `✅ Сообщество зарегистрировано!\n\nНазвание: ${name}\nID: ${chatId}\nВсего сообществ: ${result.count}/${MAX_COMMUNITIES}\n\nТеперь настройте топики:\n/set_daily — тема дневных челленджей\n/set_weekly — тема недельных\n/set_monthly — тема месячных\n/set_winners — тема победителей`, {
+          message_thread_id: threadId || undefined,
+        });
+      } else {
+        await tg.sendMessage(chatId, `❌ ${result.error}`, {
+          message_thread_id: threadId || undefined,
+        });
+      }
+      return;
+    }
+
+    // Список сообществ: /list_communities
+    if (command === "/list_communities" && isAdmin) {
+      const communities = await getCommunities(storage);
+      const list = Object.values(communities);
+
+      if (list.length === 0) {
+        await tg.sendMessage(chatId, `Нет зарегистрированных сообществ.\n\nИспользуйте /register_community для регистрации.`, {
+          message_thread_id: threadId || undefined,
+        });
+      } else {
+        let msg = `СООБЩЕСТВА (${list.length}/${MAX_COMMUNITIES})\n\n`;
+        for (const c of list) {
+          const isCurrent = c.chatId === chatId ? " ← текущее" : "";
+          msg += `• ${c.name}${isCurrent}\n  ID: ${c.chatId}\n`;
+        }
+        await tg.sendMessage(chatId, msg, {
+          message_thread_id: threadId || undefined,
+        });
+      }
+      return;
+    }
+
+    // Удалить сообщество: /unregister_community
+    if (command === "/unregister_community" && isAdmin) {
+      const result = await removeCommunity(storage, chatId);
+      if (result.success) {
+        await tg.sendMessage(chatId, `✅ Сообщество удалено из бота.`, {
+          message_thread_id: threadId || undefined,
+        });
+      } else {
+        await tg.sendMessage(chatId, `❌ ${result.error}`, {
+          message_thread_id: threadId || undefined,
+        });
+      }
+      return;
+    }
+
+    // ============================================
+    // COMMUNITY ADMIN COMMANDS (только для зарегистрированных сообществ)
+    // ============================================
+    if (!hasAccess) {
+      // Для незарегистрированных сообществ — предлагаем регистрацию
+      if (command.startsWith("/") && isAdmin) {
+        await tg.sendMessage(chatId, `Это сообщество не зарегистрировано.\n\nИспользуйте /register_community для регистрации.`, {
+          message_thread_id: threadId || undefined,
+        });
+      }
+      return;
+    }
 
     // Get topic ID - для настройки
     if (command === "/topic_id" && isAdmin) {
@@ -1043,15 +1287,15 @@ async function handleMessage(update, env, config, tg, storage) {
       return;
     }
 
-    // Set topic commands
+    // Set topic commands (per-community)
     if (command === "/set_daily" && isAdmin) {
       if (!threadId) {
         await tg.sendMessage(chatId, "Напиши команду внутри темы форума", { message_thread_id: undefined });
         return;
       }
-      const kvTopics = (await storage.get("settings:topics")) || {};
-      kvTopics.daily = threadId;
-      await storage.set("settings:topics", kvTopics);
+      const topics = config.topics || {};
+      topics.daily = threadId;
+      await setCommunityTopics(storage, chatId, topics);
       await tg.sendMessage(chatId, `Тема для дневных челленджей установлена`, {
         message_thread_id: threadId,
       });
@@ -1063,9 +1307,9 @@ async function handleMessage(update, env, config, tg, storage) {
         await tg.sendMessage(chatId, "Напиши команду внутри темы форума", { message_thread_id: undefined });
         return;
       }
-      const kvTopics = (await storage.get("settings:topics")) || {};
-      kvTopics.weekly = threadId;
-      await storage.set("settings:topics", kvTopics);
+      const topics = config.topics || {};
+      topics.weekly = threadId;
+      await setCommunityTopics(storage, chatId, topics);
       await tg.sendMessage(chatId, `Тема для недельных челленджей установлена`, {
         message_thread_id: threadId,
       });
@@ -1077,9 +1321,9 @@ async function handleMessage(update, env, config, tg, storage) {
         await tg.sendMessage(chatId, "Напиши команду внутри темы форума", { message_thread_id: undefined });
         return;
       }
-      const kvTopics = (await storage.get("settings:topics")) || {};
-      kvTopics.monthly = threadId;
-      await storage.set("settings:topics", kvTopics);
+      const topics = config.topics || {};
+      topics.monthly = threadId;
+      await setCommunityTopics(storage, chatId, topics);
       await tg.sendMessage(chatId, `Тема для месячных челленджей установлена`, {
         message_thread_id: threadId,
       });
@@ -1091,16 +1335,16 @@ async function handleMessage(update, env, config, tg, storage) {
         await tg.sendMessage(chatId, "Напиши команду внутри темы форума", { message_thread_id: undefined });
         return;
       }
-      const kvTopics = (await storage.get("settings:topics")) || {};
-      kvTopics.winners = threadId;
-      await storage.set("settings:topics", kvTopics);
+      const topics = config.topics || {};
+      topics.winners = threadId;
+      await setCommunityTopics(storage, chatId, topics);
       await tg.sendMessage(chatId, `Тема для победителей установлена`, {
         message_thread_id: threadId,
       });
       return;
     }
 
-    // Content mode configuration: /set_content_mode vanilla|medium|nsfw
+    // Content mode configuration: /set_content_mode vanilla|medium|nsfw (per-community)
     if (command === "/set_content_mode" && isAdmin) {
       const args = text.trim().split(/\s+/).slice(1);
       const mode = args[0]?.toLowerCase();
@@ -1109,7 +1353,7 @@ async function handleMessage(update, env, config, tg, storage) {
         const modesList = Object.entries(CONTENT_MODES)
           .map(([key, val]) => `• ${key} — ${val.name}: ${val.description}`)
           .join("\n");
-        const currentMode = (await storage.get("settings:content_mode")) || DEFAULT_CONTENT_MODE;
+        const currentMode = await storage.getContentMode(chatId);
         await tg.sendMessage(
           chatId,
           `РЕЖИМЫ КОНТЕНТА
@@ -1126,7 +1370,7 @@ ${modesList}
         return;
       }
 
-      await storage.set("settings:content_mode", mode);
+      await storage.setContentMode(chatId, mode);
       const modeInfo = CONTENT_MODES[mode];
       await tg.sendMessage(
         chatId,
@@ -1136,12 +1380,47 @@ ${modesList}
       return;
     }
 
-    // Schedule configuration: /schedule_daily 17, /schedule_weekly 0 17 (day hour), /schedule_monthly 1 17
+    // Toggle accepting link previews as submissions: /set_accept_links on|off
+    if (command === "/set_accept_links" && isAdmin) {
+      const args = text.trim().split(/\s+/).slice(1);
+      const value = args[0]?.toLowerCase();
+
+      const currentValue = await storage.get(`community:${chatId}:settings:accept_links`);
+
+      if (!value || !["on", "off", "1", "0", "true", "false"].includes(value)) {
+        const status = currentValue ? "ВКЛ" : "ВЫКЛ";
+        await tg.sendMessage(
+          chatId,
+          `ПРИЁМ ССЫЛОК С ПРЕВЬЮ
+
+Текущий статус: ${status}
+
+Когда включено, сообщения со ссылками (с OpenGraph превью) принимаются как работы в челлендж.
+
+Использование: /set_accept_links on|off
+Пример: /set_accept_links on`,
+          { message_thread_id: threadId || undefined }
+        );
+        return;
+      }
+
+      const newValue = ["on", "1", "true"].includes(value);
+      await storage.set(`community:${chatId}:settings:accept_links`, newValue);
+
+      await tg.sendMessage(
+        chatId,
+        `Приём ссылок с превью: ${newValue ? "ВКЛЮЧЁН" : "ВЫКЛЮЧЕН"}`,
+        { message_thread_id: threadId || undefined }
+      );
+      return;
+    }
+
+    // Schedule configuration: /schedule_daily 17, /schedule_weekly 0 17 (day hour), /schedule_monthly 1 17 (per-community)
     const scheduleMatch = command.match(/^\/schedule_(daily|weekly|monthly)$/);
     if (scheduleMatch && isAdmin) {
       const type = scheduleMatch[1];
       const args = text.trim().split(/\s+/).slice(1).map(n => parseInt(n, 10));
-      const kvSchedule = (await storage.get("settings:schedule")) || {};
+      const kvSchedule = (await storage.get(`community:${chatId}:settings:schedule`)) || {};
 
       if (type === "daily") {
         const hour = args[0];
@@ -1152,7 +1431,7 @@ ${modesList}
           return;
         }
         kvSchedule.daily = { ...kvSchedule.daily, challengeHour: hour };
-        await storage.set("settings:schedule", kvSchedule);
+        await setSchedule(storage, chatId, kvSchedule);
         await tg.sendMessage(chatId, `Дневные челленджи: ${hour}:00`, {
           message_thread_id: threadId || undefined,
         });
@@ -1165,7 +1444,7 @@ ${modesList}
           return;
         }
         kvSchedule.weekly = { ...kvSchedule.weekly, challengeDay: day, challengeHour: hour };
-        await storage.set("settings:schedule", kvSchedule);
+        await setSchedule(storage, chatId, kvSchedule);
         const dayNames = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
         await tg.sendMessage(chatId, `Недельные челленджи: ${dayNames[day]} ${hour}:00`, {
           message_thread_id: threadId || undefined,
@@ -1179,7 +1458,7 @@ ${modesList}
           return;
         }
         kvSchedule.monthly = { ...kvSchedule.monthly, challengeDay: day, challengeHour: hour };
-        await storage.set("settings:schedule", kvSchedule);
+        await setSchedule(storage, chatId, kvSchedule);
         await tg.sendMessage(chatId, `Месячные челленджи: ${day}-го числа в ${hour}:00`, {
           message_thread_id: threadId || undefined,
         });
@@ -1188,13 +1467,16 @@ ${modesList}
     }
 
     if (command === "/admin" && isAdmin) {
-      const schedule = await getSchedule(storage);
+      const schedule = await getSchedule(storage, chatId);
       const fmt = formatSchedule(schedule);
-      const currentMode = (await storage.get("settings:content_mode")) || DEFAULT_CONTENT_MODE;
+      const currentMode = await storage.getContentMode(chatId);
       const modeInfo = CONTENT_MODES[currentMode];
+      const acceptLinks = await storage.get(`community:${chatId}:settings:accept_links`);
+      const communityName = config.name || `ID: ${chatId}`;
       await tg.sendMessage(
         chatId,
         `АДМИН-ПАНЕЛЬ
+Сообщество: ${communityName}
 
 Опросы
 /poll_daily — создать опрос дня
@@ -1222,6 +1504,9 @@ ${modesList}
 Режим контента: ${modeInfo.name}
 /set_content_mode — изменить режим
 
+Ссылки с превью: ${acceptLinks ? "ВКЛ" : "ВЫКЛ"}
+/set_accept_links — вкл/выкл приём ссылок
+
 Расписание (текущее)
 • Дневные: ${fmt.daily}
 • Недельные: ${fmt.weekly}
@@ -1229,7 +1514,12 @@ ${modesList}
 
 /schedule_daily ЧАС
 /schedule_weekly ДЕНЬ ЧАС
-/schedule_monthly ДЕНЬ ЧАС`,
+/schedule_monthly ДЕНЬ ЧАС
+
+Сообщества
+/register_community — зарегистрировать
+/list_communities — список
+/unregister_community — удалить`,
         { message_thread_id: threadId || undefined }
       );
       return;
@@ -1237,58 +1527,58 @@ ${modesList}
 
     // Admin: Create polls (no confirmation message - poll itself is visible)
     if (command === "/poll_daily" && isAdmin) {
-      await storage.deletePoll("daily");
-      await generatePoll(env, config, tg, storage, "daily");
+      await storage.deletePoll(chatId, "daily");
+      await generatePoll(env, chatId, config, tg, storage, "daily");
       return;
     }
     if (command === "/poll_weekly" && isAdmin) {
-      await storage.deletePoll("weekly");
-      await generatePoll(env, config, tg, storage, "weekly");
+      await storage.deletePoll(chatId, "weekly");
+      await generatePoll(env, chatId, config, tg, storage, "weekly");
       return;
     }
     if (command === "/poll_monthly" && isAdmin) {
-      await storage.deletePoll("monthly");
-      await generatePoll(env, config, tg, storage, "monthly");
+      await storage.deletePoll(chatId, "monthly");
+      await generatePoll(env, chatId, config, tg, storage, "monthly");
       return;
     }
 
     // Admin: Start challenges (announcement is pinned, no extra notification needed)
     if (command === "/run_daily" && isAdmin) {
-      await startChallenge(env, config, tg, storage, "daily");
+      await startChallenge(env, chatId, config, tg, storage, "daily");
       return;
     }
     if (command === "/run_weekly" && isAdmin) {
-      await startChallenge(env, config, tg, storage, "weekly");
+      await startChallenge(env, chatId, config, tg, storage, "weekly");
       return;
     }
     if (command === "/run_monthly" && isAdmin) {
-      await startChallenge(env, config, tg, storage, "monthly");
+      await startChallenge(env, chatId, config, tg, storage, "monthly");
       return;
     }
 
     // Admin: Finish challenges (winner announcement is posted, no extra notification needed)
     if (command === "/finish_daily" && isAdmin) {
-      await finishChallenge(env, config, tg, storage, "daily");
+      await finishChallenge(env, chatId, config, tg, storage, "daily");
       return;
     }
     if (command === "/finish_weekly" && isAdmin) {
-      await finishChallenge(env, config, tg, storage, "weekly");
+      await finishChallenge(env, chatId, config, tg, storage, "weekly");
       return;
     }
     if (command === "/finish_monthly" && isAdmin) {
-      await finishChallenge(env, config, tg, storage, "monthly");
+      await finishChallenge(env, chatId, config, tg, storage, "monthly");
       return;
     }
 
-    // Admin: Status
+    // Admin: Status (per-community)
     if (command === "/status" && isAdmin) {
       const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly] = await Promise.all([
-        storage.getChallenge("daily"),
-        storage.getChallenge("weekly"),
-        storage.getChallenge("monthly"),
-        storage.getPoll("daily"),
-        storage.getPoll("weekly"),
-        storage.getPoll("monthly"),
+        storage.getChallenge(chatId, "daily"),
+        storage.getChallenge(chatId, "weekly"),
+        storage.getChallenge(chatId, "monthly"),
+        storage.getPoll(chatId, "daily"),
+        storage.getPoll(chatId, "weekly"),
+        storage.getPoll(chatId, "monthly"),
       ]);
 
       const formatChallenge = (c, name) => {
@@ -1314,11 +1604,11 @@ ${formatChallenge(monthly, "Месячный")}`;
       return;
     }
 
-    // Admin: Current challenge stats - /cs_daily, /cs_weekly, /cs_monthly
+    // Admin: Current challenge stats - /cs_daily, /cs_weekly, /cs_monthly (per-community)
     const csMatch = command.match(/^\/cs_(daily|weekly|monthly)$/);
     if (csMatch && isAdmin) {
       const type = csMatch[1];
-      const challenge = await storage.getChallenge(type);
+      const challenge = await storage.getChallenge(chatId, type);
       const typeNames = { daily: "Дневной", weekly: "Недельный", monthly: "Месячный" };
 
       if (!challenge || challenge.status !== "active") {
@@ -1328,7 +1618,7 @@ ${formatChallenge(monthly, "Месячный")}`;
         return;
       }
 
-      const submissions = await storage.getSubmissions(type, challenge.id);
+      const submissions = await storage.getSubmissions(chatId, type, challenge.id);
       const endDateStr = new Date(challenge.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
       if (submissions.length === 0) {
@@ -1397,15 +1687,16 @@ ${formatChallenge(monthly, "Месячный")}`;
       return;
     }
 
+    // User commands (per-community)
     if (text.startsWith("/stats")) {
       const userId = message.from?.id;
       if (!userId) return;
 
       // Parallel KV reads for better performance
       const [daily, weekly, monthly] = await Promise.all([
-        storage.getUserStats("daily", userId),
-        storage.getUserStats("weekly", userId),
-        storage.getUserStats("monthly", userId),
+        storage.getUserStats(chatId, "daily", userId),
+        storage.getUserStats(chatId, "weekly", userId),
+        storage.getUserStats(chatId, "monthly", userId),
       ]);
       const total = daily.wins + weekly.wins + monthly.wins;
 
@@ -1434,7 +1725,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       };
       const type = typeMap[args[1]?.toLowerCase()] || "daily";
 
-      const leaderboard = await storage.getLeaderboard(type);
+      const leaderboard = await storage.getLeaderboard(chatId, type);
       if (leaderboard.length === 0) {
         await tg.sendMessage(
           chatId,
@@ -1467,11 +1758,11 @@ ${formatChallenge(monthly, "Месячный")}`;
     }
 
     if (text.startsWith("/current")) {
-      // Parallel KV reads for better performance
+      // Parallel KV reads for better performance (per-community)
       const [daily, weekly, monthly] = await Promise.all([
-        storage.getChallenge("daily"),
-        storage.getChallenge("weekly"),
-        storage.getChallenge("monthly"),
+        storage.getChallenge(chatId, "daily"),
+        storage.getChallenge(chatId, "weekly"),
+        storage.getChallenge(chatId, "monthly"),
       ]);
 
       const format = (c, type) => {
@@ -1489,20 +1780,28 @@ ${formatChallenge(monthly, "Месячный")}`;
       return;
     }
 
-    // Photo submission
-    if (
-      (message.photo && message.photo.length > 0) ||
-      message.document?.mime_type?.startsWith("image/")
-    ) {
-      if (chatId !== config.chatId) return;
+    // Photo submission (includes photos, image documents, and links with previews)
+    const hasPhoto = message.photo && message.photo.length > 0;
+    const hasImageDocument = message.document?.mime_type?.startsWith("image/");
+    // Check for link with preview (OpenGraph images)
+    const hasLinkPreview = message.entities?.some(e => e.type === "url") &&
+                          (message.link_preview_options || message.web_page);
 
-      const challengeType = await storage.isActiveTopic(threadId);
+    // Check community setting for accepting link previews
+    const acceptLinks = await storage.get(`community:${chatId}:settings:accept_links`);
+    const isValidSubmission = hasPhoto || hasImageDocument || (hasLinkPreview && acceptLinks);
+
+    if (isValidSubmission) {
+      // Check if this community is registered
+      if (!await hasAccessToChat(env, storage, chatId)) return;
+
+      const challengeType = await storage.isActiveTopic(chatId, threadId);
       if (!challengeType) {
         // Not a challenge topic - silently ignore
         return;
       }
 
-      const challenge = await storage.getChallenge(challengeType);
+      const challenge = await storage.getChallenge(chatId, challengeType);
       if (!challenge || challenge.status !== "active") {
         await tg.sendMessage(
           chatId,
@@ -1535,6 +1834,7 @@ ${formatChallenge(monthly, "Месячный")}`;
 
       // Check for duplicate
       const submissions = await storage.getSubmissions(
+        chatId,
         challengeType,
         challenge.id,
       );
@@ -1550,7 +1850,7 @@ ${formatChallenge(monthly, "Месячный")}`;
         return;
       }
 
-      await storage.addSubmission(challengeType, challenge.id, {
+      await storage.addSubmission(chatId, challengeType, challenge.id, {
         messageId: message.message_id,
         userId: message.from?.id,
         username: message.from?.username || message.from?.first_name,
@@ -1565,7 +1865,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       });
 
       console.log(
-        `Submission: user=${message.from?.id}, msg=${message.message_id}`,
+        `Submission: community=${chatId}, user=${message.from?.id}, msg=${message.message_id}`,
       );
     }
   } catch (e) {
@@ -1573,22 +1873,26 @@ ${formatChallenge(monthly, "Месячный")}`;
   }
 }
 
-async function handleReactionCount(update, env, config, storage) {
+async function handleReactionCount(update, env, storage) {
   try {
     const reaction = update.message_reaction_count;
     if (!reaction) return;
-    if (reaction.chat.id !== config.chatId) return;
+
+    const chatId = reaction.chat.id;
+
+    // Check if this community is registered
+    if (!await hasAccessToChat(env, storage, chatId)) return;
 
     // Use thread ID to determine which challenge type this belongs to
     const threadId = reaction.message_thread_id;
-    const challengeType = await storage.isActiveTopic(threadId);
+    const challengeType = await storage.isActiveTopic(chatId, threadId);
     if (!challengeType) return;
 
-    const challenge = await storage.getChallenge(challengeType);
+    const challenge = await storage.getChallenge(chatId, challengeType);
     if (!challenge || challenge.status !== "active" || Date.now() >= challenge.endsAt) return;
 
     // Check if this message is actually a submission (avoid updating non-submissions)
-    const submissions = await storage.getSubmissions(challengeType, challenge.id);
+    const submissions = await storage.getSubmissions(chatId, challengeType, challenge.id);
     const submission = submissions.find((s) => s.messageId === reaction.message_id);
     if (!submission) return; // Not a submission - ignore
 
@@ -1603,6 +1907,7 @@ async function handleReactionCount(update, env, config, storage) {
     }
 
     await storage.updateSubmissionScore(
+      chatId,
       challengeType,
       challenge.id,
       reaction.message_id,
@@ -1617,13 +1922,15 @@ async function handleReactionCount(update, env, config, storage) {
 }
 
 // Handle individual reaction updates (when reaction authors are visible)
-async function handleReaction(update, env, config, storage) {
+async function handleReaction(update, env, storage) {
   try {
     const reaction = update.message_reaction;
     if (!reaction) return;
 
+    const chatId = reaction.chat.id;
+
     console.log("Reaction received:", JSON.stringify({
-      chat_id: reaction.chat.id,
+      chat_id: chatId,
       message_id: reaction.message_id,
       thread_id: reaction.message_thread_id,
       user_id: reaction.user?.id,
@@ -1631,8 +1938,9 @@ async function handleReaction(update, env, config, storage) {
       old_reaction: reaction.old_reaction,
     }));
 
-    if (reaction.chat.id !== config.chatId) {
-      console.log("Reaction ignored: wrong chat", { got: reaction.chat.id, expected: config.chatId });
+    // Check if this community is registered
+    if (!await hasAccessToChat(env, storage, chatId)) {
+      console.log("Reaction ignored: community not registered", { chatId });
       return;
     }
 
@@ -1642,10 +1950,10 @@ async function handleReaction(update, env, config, storage) {
     let submission = null;
 
     for (const type of ["daily", "weekly", "monthly"]) {
-      const ch = await storage.getChallenge(type);
+      const ch = await storage.getChallenge(chatId, type);
       if (ch?.status === "active" && Date.now() < ch.endsAt) {
         // Check if this message is a submission in this challenge
-        const submissions = await storage.getSubmissions(type, ch.id);
+        const submissions = await storage.getSubmissions(chatId, type, ch.id);
         const found = submissions.find(s => s.messageId === reaction.message_id);
         if (found) {
           challengeType = type;
@@ -1657,7 +1965,7 @@ async function handleReaction(update, env, config, storage) {
     }
 
     if (!challengeType || !challenge) {
-      console.log("Reaction ignored: message not found in any active challenge", { messageId: reaction.message_id });
+      console.log("Reaction ignored: message not found in any active challenge", { chatId, messageId: reaction.message_id });
       return;
     }
 
@@ -1685,7 +1993,7 @@ async function handleReaction(update, env, config, storage) {
       return;
     }
 
-    const reactionsKey = `reactions:${challengeType}:${challenge.id}:${reaction.message_id}`;
+    const reactionsKey = `community:${chatId}:reactions:${challengeType}:${challenge.id}:${reaction.message_id}`;
     const reactionsMap = (await storage.get(reactionsKey)) || {};
     reactionsMap[userId] = userScore;
     await storage.set(reactionsKey, reactionsMap);
@@ -1694,13 +2002,14 @@ async function handleReaction(update, env, config, storage) {
     const totalScore = Object.values(reactionsMap).reduce((sum, s) => sum + s, 0);
 
     await storage.updateSubmissionScore(
+      chatId,
       challengeType,
       challenge.id,
       reaction.message_id,
       totalScore,
     );
 
-    console.log(`Reaction scored: type=${challengeType}, msg=${reaction.message_id}, user=${userId}, userScore=${userScore}, totalScore=${totalScore}`);
+    console.log(`Reaction scored: community=${chatId}, type=${challengeType}, msg=${reaction.message_id}, user=${userId}, userScore=${userScore}, totalScore=${totalScore}`);
   } catch (e) {
     console.error("handleReaction error:", {
       error: e.message,
@@ -1713,14 +2022,14 @@ async function handleReaction(update, env, config, storage) {
 // CRON JOBS
 // ============================================
 
-async function generatePoll(env, config, tg, storage, type) {
+async function generatePoll(env, chatId, config, tg, storage, type) {
   try {
-    const existing = await storage.getPoll(type);
+    const existing = await storage.getPoll(chatId, type);
     if (existing) return;
 
     const topicId = config.topics[type];
-    const previousThemes = await storage.getThemeHistory(type);
-    const contentMode = (await storage.get("settings:content_mode")) || DEFAULT_CONTENT_MODE;
+    const previousThemes = await storage.getThemeHistory(chatId, type);
+    const contentMode = (await storage.get(`community:${chatId}:settings:content_mode`)) || DEFAULT_CONTENT_MODE;
     const themesRaw = await generateThemes(env.GEMINI_API_KEY, type, "ru", previousThemes, contentMode);
 
     // Extract short names for poll, keep full strings for storage
@@ -1728,12 +2037,12 @@ async function generatePoll(env, config, tg, storage, type) {
 
     // Validate: need at least 2 options for poll
     if (shortNames.length < 2) {
-      console.error(`generatePoll: not enough themes for ${type}`);
+      console.error(`generatePoll: not enough themes for ${type}, community=${chatId}`);
       return;
     }
 
     const poll = await tg.sendPoll(
-      config.chatId,
+      chatId,
       ru.pollQuestion(type),
       shortNames,
       {
@@ -1743,7 +2052,7 @@ async function generatePoll(env, config, tg, storage, type) {
       },
     );
 
-    await storage.savePoll({
+    await storage.savePoll(chatId, {
       type,
       pollId: poll.poll.id,
       messageId: poll.message_id,
@@ -1754,12 +2063,12 @@ async function generatePoll(env, config, tg, storage, type) {
 
     // Pin the poll
     try {
-      await tg.pinChatMessage(config.chatId, poll.message_id);
+      await tg.pinChatMessage(chatId, poll.message_id);
     } catch (e) {
       console.error("Failed to pin poll:", e.message);
     }
 
-    console.log(`Poll created and pinned: ${type}`);
+    console.log(`Poll created and pinned: community=${chatId}, type=${type}`);
   } catch (e) {
     console.error(`generatePoll error (${type}):`, {
       error: e.message,
@@ -1768,24 +2077,24 @@ async function generatePoll(env, config, tg, storage, type) {
   }
 }
 
-async function finishChallenge(env, config, tg, storage, type) {
+async function finishChallenge(env, chatId, config, tg, storage, type) {
   try {
-    const challenge = await storage.getChallenge(type);
+    const challenge = await storage.getChallenge(chatId, type);
     if (!challenge || challenge.status !== "active") return;
 
     // Unpin the announcement
     if (challenge.announcementMessageId) {
       try {
-        await tg.unpinChatMessage(config.chatId, challenge.announcementMessageId);
+        await tg.unpinChatMessage(chatId, challenge.announcementMessageId);
       } catch (e) {
         console.error("Failed to unpin announcement:", e.message);
       }
     }
 
-    const submissions = await storage.getSubmissions(type, challenge.id);
+    const submissions = await storage.getSubmissions(chatId, type, challenge.id);
 
     if (submissions.length === 0) {
-      await tg.sendMessage(config.chatId, ru.noSubmissions, {
+      await tg.sendMessage(chatId, ru.noSubmissions, {
         message_thread_id: challenge.topicThreadId || undefined,
       });
     } else {
@@ -1799,7 +2108,7 @@ async function finishChallenge(env, config, tg, storage, type) {
         .join(", ");
 
       await tg.sendMessage(
-        config.chatId,
+        chatId,
         ru.winnerAnnouncement(winnerNames, maxScore, type),
         {
           message_thread_id: challenge.topicThreadId || undefined,
@@ -1812,8 +2121,8 @@ async function finishChallenge(env, config, tg, storage, type) {
         if (config.topics.winners) {
           try {
             await tg.forwardMessage(
-              config.chatId,
-              config.chatId,
+              chatId,
+              chatId,
               winner.messageId,
               {
                 message_thread_id: config.topics.winners,
@@ -1823,7 +2132,7 @@ async function finishChallenge(env, config, tg, storage, type) {
               ? `@${winner.username}`
               : `Участник #${winner.userId}`;
             await tg.sendMessage(
-              config.chatId,
+              chatId,
               ru.winnerAnnouncementFull(winnerName, winner.score, type, challenge.topic, challenge.topicFull || challenge.topic),
               {
                 message_thread_id: config.topics.winners,
@@ -1834,16 +2143,16 @@ async function finishChallenge(env, config, tg, storage, type) {
           }
         }
 
-        await storage.addWin(type, winner.userId, winner.username);
+        await storage.addWin(chatId, type, winner.userId, winner.username);
       }
     }
 
     challenge.status = "finished";
-    await storage.saveChallenge(challenge);
+    await storage.saveChallenge(chatId, challenge);
 
-    const activeTopics = await storage.getActiveTopics();
+    const activeTopics = await storage.getActiveTopics(chatId);
     delete activeTopics[challenge.topicThreadId];
-    await storage.setActiveTopics(activeTopics);
+    await storage.setActiveTopics(chatId, activeTopics);
   } catch (e) {
     console.error(`finishChallenge error (${type}):`, {
       error: e.message,
@@ -1852,11 +2161,11 @@ async function finishChallenge(env, config, tg, storage, type) {
   }
 }
 
-async function startChallenge(env, config, tg, storage, type) {
+async function startChallenge(env, chatId, config, tg, storage, type) {
   try {
-    await finishChallenge(env, config, tg, storage, type);
+    await finishChallenge(env, chatId, config, tg, storage, type);
 
-    const poll = await storage.getPoll(type);
+    const poll = await storage.getPoll(chatId, type);
     let shortTheme = "Свободная тема";
     let fullTheme =
       "Свободная тема — создайте что угодно, дайте волю фантазии!";
@@ -1864,7 +2173,7 @@ async function startChallenge(env, config, tg, storage, type) {
 
     if (poll) {
       try {
-        const stopped = await tg.stopPoll(config.chatId, poll.messageId);
+        const stopped = await tg.stopPoll(chatId, poll.messageId);
         let maxVotes = 0;
         let winnerShort = "";
 
@@ -1879,7 +2188,7 @@ async function startChallenge(env, config, tg, storage, type) {
 
         // Unpin the poll
         try {
-          await tg.unpinChatMessage(config.chatId, poll.messageId);
+          await tg.unpinChatMessage(chatId, poll.messageId);
         } catch (e) {
           console.error("Failed to unpin poll:", e.message);
         }
@@ -1905,7 +2214,7 @@ async function startChallenge(env, config, tg, storage, type) {
           fullTheme = parsed.full;
         }
       }
-      await storage.deletePoll(type);
+      await storage.deletePoll(chatId, type);
     }
 
     const topicId = config.topics[type];
@@ -1922,11 +2231,11 @@ async function startChallenge(env, config, tg, storage, type) {
     const startDateStr = new Date(startedAt).toLocaleString("ru-RU", dateFormat);
     const endDateStr = new Date(endsAt).toLocaleString("ru-RU", dateFormat);
 
-    const challengeId = await storage.getNextChallengeId(type);
+    const challengeId = await storage.getNextChallengeId(chatId, type);
 
     // Use full description in announcement with vote count
     const announcement = await tg.sendMessage(
-      config.chatId,
+      chatId,
       ru.challengeAnnouncement(type, fullTheme, startDateStr, endDateStr, voteCount),
       {
         message_thread_id: topicId || undefined,
@@ -1935,13 +2244,13 @@ async function startChallenge(env, config, tg, storage, type) {
 
     // Pin the announcement
     try {
-      await tg.pinChatMessage(config.chatId, announcement.message_id);
+      await tg.pinChatMessage(chatId, announcement.message_id);
     } catch (e) {
       console.error("Failed to pin announcement:", e.message);
     }
 
     // Store short theme for leaderboard/stats display
-    await storage.saveChallenge({
+    await storage.saveChallenge(chatId, {
       id: challengeId,
       type,
       topic: shortTheme,
@@ -1953,14 +2262,14 @@ async function startChallenge(env, config, tg, storage, type) {
       announcementMessageId: announcement.message_id,
     });
 
-    const activeTopics = await storage.getActiveTopics();
+    const activeTopics = await storage.getActiveTopics(chatId);
     activeTopics[topicId] = type;
-    await storage.setActiveTopics(activeTopics);
+    await storage.setActiveTopics(chatId, activeTopics);
 
     // Save theme to history (to avoid repetition in future)
-    await storage.addThemeToHistory(type, shortTheme);
+    await storage.addThemeToHistory(chatId, type, shortTheme);
 
-    console.log(`Challenge started: ${type} #${challengeId} - "${shortTheme}" (${voteCount} votes)`);
+    console.log(`Challenge started: community=${chatId}, ${type} #${challengeId} - "${shortTheme}" (${voteCount} votes)`);
   } catch (e) {
     console.error(`startChallenge error (${type}):`, {
       error: e.message,
@@ -1969,7 +2278,37 @@ async function startChallenge(env, config, tg, storage, type) {
   }
 }
 
-async function handleCron(env, config, tg, storage, cron) {
+async function handleCronForCommunity(env, chatId, config, tg, storage, h, d, w, day, weekday) {
+  // Get schedule for this community
+  const schedule = await getSchedule(storage, chatId);
+  const pollHourBefore = 12; // Poll starts 12 hours before challenge
+
+  // Daily challenge
+  const dailyPollHour = (schedule.daily.challengeHour - pollHourBefore + 24) % 24;
+  if (h === dailyPollHour && day === "*" && weekday === "*") {
+    await generatePoll(env, chatId, config, tg, storage, "daily");
+  } else if (h === schedule.daily.challengeHour && day === "*" && weekday === "*") {
+    await startChallenge(env, chatId, config, tg, storage, "daily");
+  }
+
+  // Weekly challenge
+  const weeklyPollDay = (schedule.weekly.challengeDay + 6) % 7; // Day before
+  if (h === schedule.weekly.pollHour && w === weeklyPollDay) {
+    await generatePoll(env, chatId, config, tg, storage, "weekly");
+  } else if (h === schedule.weekly.challengeHour && w === schedule.weekly.challengeDay) {
+    await startChallenge(env, chatId, config, tg, storage, "weekly");
+  }
+
+  // Monthly challenge
+  const monthlyPollDay = schedule.monthly.challengeDay === 1 ? 28 : schedule.monthly.challengeDay - 3;
+  if (h === schedule.monthly.pollHour && d === monthlyPollDay) {
+    await generatePoll(env, chatId, config, tg, storage, "monthly");
+  } else if (h === schedule.monthly.challengeHour && d === schedule.monthly.challengeDay) {
+    await startChallenge(env, chatId, config, tg, storage, "monthly");
+  }
+}
+
+async function handleCron(env, tg, storage, cron) {
   try {
     const [, hour, day, weekday] = cron.split(" ");
     const h = parseInt(hour, 10);
@@ -1978,32 +2317,29 @@ async function handleCron(env, config, tg, storage, cron) {
 
     console.log(`Cron: ${cron}`);
 
-    // Get schedule from KV
-    const schedule = await getSchedule(storage);
-    const pollHourBefore = 12; // Poll starts 12 hours before challenge
+    // Get all active communities (returns array of config objects)
+    const communityConfigs = await getAllActiveCommunities(env, storage);
 
-    // Daily challenge
-    const dailyPollHour = (schedule.daily.challengeHour - pollHourBefore + 24) % 24;
-    if (h === dailyPollHour && day === "*" && weekday === "*") {
-      await generatePoll(env, config, tg, storage, "daily");
-    } else if (h === schedule.daily.challengeHour && day === "*" && weekday === "*") {
-      await startChallenge(env, config, tg, storage, "daily");
+    if (communityConfigs.length === 0) {
+      console.log("Cron: no active communities");
+      return;
     }
 
-    // Weekly challenge
-    const weeklyPollDay = (schedule.weekly.challengeDay + 6) % 7; // Day before
-    if (h === schedule.weekly.pollHour && w === weeklyPollDay) {
-      await generatePoll(env, config, tg, storage, "weekly");
-    } else if (h === schedule.weekly.challengeHour && w === schedule.weekly.challengeDay) {
-      await startChallenge(env, config, tg, storage, "weekly");
-    }
+    console.log(`Cron: processing ${communityConfigs.length} communities`);
 
-    // Monthly challenge
-    const monthlyPollDay = schedule.monthly.challengeDay === 1 ? 28 : schedule.monthly.challengeDay - 3;
-    if (h === schedule.monthly.pollHour && d === monthlyPollDay) {
-      await generatePoll(env, config, tg, storage, "monthly");
-    } else if (h === schedule.monthly.challengeHour && d === schedule.monthly.challengeDay) {
-      await startChallenge(env, config, tg, storage, "monthly");
+    // Process each community - configs already contain chatId
+    for (const config of communityConfigs) {
+      try {
+        const chatId = config.chatId;
+        if (!chatId) continue;
+
+        await handleCronForCommunity(env, chatId, config, tg, storage, h, d, w, day, weekday);
+      } catch (e) {
+        console.error(`Cron error for community ${config.chatId}:`, {
+          error: e.message,
+          stack: e.stack,
+        });
+      }
     }
   } catch (e) {
     console.error("handleCron error:", {
@@ -2079,9 +2415,10 @@ export default {
 
     // ============================================
     // ADMIN ENDPOINTS (для тестирования)
+    // Формат: /admin/{action}/{type}?chat_id={chatId}
     // ============================================
 
-    // POST /admin/poll/daily|weekly|monthly - создать опрос
+    // POST /admin/poll/daily|weekly|monthly?chat_id=123 - создать опрос
     if (url.pathname.startsWith("/admin/poll/") && request.method === "POST") {
       const authHeader = request.headers.get("Authorization");
       if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
@@ -2099,16 +2436,33 @@ export default {
         });
       }
 
+      const chatIdParam = url.searchParams.get("chat_id");
+      if (!chatIdParam) {
+        return new Response(JSON.stringify({ error: "Missing chat_id parameter" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const chatId = parseInt(chatIdParam, 10);
+
       try {
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
-        const config = await getConfigWithTopics(env, storage);
+        const config = await getConfigForChat(env, storage, chatId);
+
+        if (!config) {
+          return new Response(JSON.stringify({ error: "Community not registered" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
 
         // Delete existing poll if any
-        await storage.deletePoll(type);
-        await generatePoll(env, config, tg, storage, type);
+        await storage.deletePoll(chatId, type);
+        await generatePoll(env, chatId, config, tg, storage, type);
 
-        return new Response(JSON.stringify({ success: true, action: "poll", type }), {
+        return new Response(JSON.stringify({ success: true, action: "poll", type, chatId }), {
           headers: { "Content-Type": "application/json" },
         });
       } catch (e) {
@@ -2119,7 +2473,7 @@ export default {
       }
     }
 
-    // POST /admin/start/daily|weekly|monthly - запустить челлендж
+    // POST /admin/start/daily|weekly|monthly?chat_id=123 - запустить челлендж
     if (url.pathname.startsWith("/admin/start/") && request.method === "POST") {
       const authHeader = request.headers.get("Authorization");
       if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
@@ -2137,14 +2491,31 @@ export default {
         });
       }
 
+      const chatIdParam = url.searchParams.get("chat_id");
+      if (!chatIdParam) {
+        return new Response(JSON.stringify({ error: "Missing chat_id parameter" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const chatId = parseInt(chatIdParam, 10);
+
       try {
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
-        const config = await getConfigWithTopics(env, storage);
+        const config = await getConfigForChat(env, storage, chatId);
 
-        await startChallenge(env, config, tg, storage, type);
+        if (!config) {
+          return new Response(JSON.stringify({ error: "Community not registered" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
 
-        return new Response(JSON.stringify({ success: true, action: "start", type }), {
+        await startChallenge(env, chatId, config, tg, storage, type);
+
+        return new Response(JSON.stringify({ success: true, action: "start", type, chatId }), {
           headers: { "Content-Type": "application/json" },
         });
       } catch (e) {
@@ -2155,7 +2526,7 @@ export default {
       }
     }
 
-    // POST /admin/finish/daily|weekly|monthly - завершить челлендж
+    // POST /admin/finish/daily|weekly|monthly?chat_id=123 - завершить челлендж
     if (url.pathname.startsWith("/admin/finish/") && request.method === "POST") {
       const authHeader = request.headers.get("Authorization");
       if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
@@ -2173,14 +2544,31 @@ export default {
         });
       }
 
+      const chatIdParam = url.searchParams.get("chat_id");
+      if (!chatIdParam) {
+        return new Response(JSON.stringify({ error: "Missing chat_id parameter" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const chatId = parseInt(chatIdParam, 10);
+
       try {
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
-        const config = await getConfigWithTopics(env, storage);
+        const config = await getConfigForChat(env, storage, chatId);
 
-        await finishChallenge(env, config, tg, storage, type);
+        if (!config) {
+          return new Response(JSON.stringify({ error: "Community not registered" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
 
-        return new Response(JSON.stringify({ success: true, action: "finish", type }), {
+        await finishChallenge(env, chatId, config, tg, storage, type);
+
+        return new Response(JSON.stringify({ success: true, action: "finish", type, chatId }), {
           headers: { "Content-Type": "application/json" },
         });
       } catch (e) {
@@ -2191,7 +2579,8 @@ export default {
       }
     }
 
-    // GET /admin/status - посмотреть текущее состояние
+    // GET /admin/status?chat_id=123 - посмотреть текущее состояние сообщества
+    // GET /admin/status - список всех сообществ
     if (url.pathname === "/admin/status") {
       const authHeader = request.headers.get("Authorization");
       if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
@@ -2201,25 +2590,45 @@ export default {
         });
       }
 
+      const chatIdParam = url.searchParams.get("chat_id");
+
       try {
         const storage = new Storage(env.CHALLENGE_KV);
-        const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly, activeTopics] = await Promise.all([
-          storage.getChallenge("daily"),
-          storage.getChallenge("weekly"),
-          storage.getChallenge("monthly"),
-          storage.getPoll("daily"),
-          storage.getPoll("weekly"),
-          storage.getPoll("monthly"),
-          storage.getActiveTopics(),
-        ]);
 
-        return new Response(JSON.stringify({
-          challenges: { daily, weekly, monthly },
-          polls: { daily: !!pollDaily, weekly: !!pollWeekly, monthly: !!pollMonthly },
-          activeTopics,
-        }, null, 2), {
-          headers: { "Content-Type": "application/json" },
-        });
+        if (chatIdParam) {
+          // Status for specific community
+          const chatId = parseInt(chatIdParam, 10);
+          const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly, activeTopics] = await Promise.all([
+            storage.getChallenge(chatId, "daily"),
+            storage.getChallenge(chatId, "weekly"),
+            storage.getChallenge(chatId, "monthly"),
+            storage.getPoll(chatId, "daily"),
+            storage.getPoll(chatId, "weekly"),
+            storage.getPoll(chatId, "monthly"),
+            storage.getActiveTopics(chatId),
+          ]);
+
+          return new Response(JSON.stringify({
+            chatId,
+            challenges: { daily, weekly, monthly },
+            polls: { daily: !!pollDaily, weekly: !!pollWeekly, monthly: !!pollMonthly },
+            activeTopics,
+          }, null, 2), {
+            headers: { "Content-Type": "application/json" },
+          });
+        } else {
+          // List all communities
+          const communities = await getAllActiveCommunities(env, storage);
+          const communitiesData = await getCommunities(storage);
+
+          return new Response(JSON.stringify({
+            totalCommunities: communities.length,
+            maxCommunities: MAX_COMMUNITIES,
+            communities: communitiesData,
+          }, null, 2), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
       } catch (e) {
         return new Response(JSON.stringify({ error: e.message }), {
           status: 500,
@@ -2228,7 +2637,7 @@ export default {
       }
     }
 
-    // Info (protected with ADMIN_SECRET)
+    // Info (protected with ADMIN_SECRET) - list all communities
     if (url.pathname === "/info") {
       try {
         const authHeader = request.headers.get("Authorization");
@@ -2240,12 +2649,17 @@ export default {
         }
 
         const storage = new Storage(env.CHALLENGE_KV);
-        const config = await getConfigWithTopics(env, storage);
+        const communities = await getAllActiveCommunities(env, storage);
+        const communitiesData = await getCommunities(storage);
+
         return new Response(
           JSON.stringify({
             configured: !!env.BOT_TOKEN,
-            chat_id: config.chatId,
-            topics: config.topics,
+            version: "3.0.0-multi",
+            maxCommunities: MAX_COMMUNITIES,
+            totalCommunities: communities.length,
+            communities: communitiesData,
+            legacyChatId: env.CHAT_ID ? parseInt(env.CHAT_ID, 10) : null,
           }),
           { headers: { "Content-Type": "application/json" } },
         );
@@ -2287,14 +2701,14 @@ export default {
 
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
-        const config = await getConfigWithTopics(env, storage);
 
+        // Handlers determine community dynamically from update
         if (update.message) {
-          await handleMessage(update, env, config, tg, storage);
+          await handleMessage(update, env, tg, storage);
         } else if (update.message_reaction) {
-          await handleReaction(update, env, config, storage);
+          await handleReaction(update, env, storage);
         } else if (update.message_reaction_count) {
-          await handleReactionCount(update, env, config, storage);
+          await handleReactionCount(update, env, storage);
         }
       } catch (e) {
         console.error("Webhook error:", {
@@ -2311,16 +2725,16 @@ export default {
 
   async scheduled(event, env) {
     try {
-      if (!env.BOT_TOKEN || !env.CHAT_ID) {
-        console.error("Scheduled job skipped: missing BOT_TOKEN or CHAT_ID");
+      if (!env.BOT_TOKEN) {
+        console.error("Scheduled job skipped: missing BOT_TOKEN");
         return;
       }
 
       const tg = new TelegramAPI(env.BOT_TOKEN);
       const storage = new Storage(env.CHALLENGE_KV);
-      const config = await getConfigWithTopics(env, storage);
 
-      await handleCron(env, config, tg, storage, event.cron);
+      // handleCron iterates over all registered communities
+      await handleCron(env, tg, storage, event.cron);
     } catch (e) {
       console.error("Scheduled job error:", {
         error: e.message,
