@@ -17,6 +17,9 @@ const CONTENT_MODES = {
 };
 const DEFAULT_CONTENT_MODE = "vanilla";
 
+// Минимум реакций для принятия предложения темы (по умолчанию)
+const DEFAULT_MIN_SUGGESTION_REACTIONS = 3;
+
 // Russian pluralization helper
 function pluralize(n, one, few, many) {
   const mod10 = Math.abs(n) % 10;
@@ -711,6 +714,16 @@ class Storage {
   // Очистить предложения после использования
   async clearSuggestions(chatId, type) {
     await this.delete(this._key(chatId, "suggestions", type));
+  }
+
+  // Минимум реакций для принятия предложения (per-community)
+  async getMinSuggestionReactions(chatId) {
+    const value = await this.get(this._key(chatId, "settings", "min_suggestion_reactions"));
+    return value ?? DEFAULT_MIN_SUGGESTION_REACTIONS;
+  }
+
+  async setMinSuggestionReactions(chatId, count) {
+    await this.set(this._key(chatId, "settings", "min_suggestion_reactions"), count);
   }
 
   // Найти предложение по messageId
@@ -1484,6 +1497,48 @@ ${modesList}
       return;
     }
 
+    // Настройка минимума реакций для предложений
+    if (command === "/set_suggestion_reactions" && isAdmin) {
+      const args = text.trim().split(/\s+/).slice(1);
+      const value = parseInt(args[0], 10);
+
+      const currentValue = await storage.getMinSuggestionReactions(chatId);
+
+      if (isNaN(value) || !args[0]) {
+        await tg.sendMessage(
+          chatId,
+          `МИНИМУМ РЕАКЦИЙ ДЛЯ ПРЕДЛОЖЕНИЙ ТЕМ
+
+Текущее значение: ${currentValue}
+
+Предложенная тема попадёт в опрос, если наберёт достаточно реакций до начала голосования.
+
+Использование: /set_suggestion_reactions ЧИСЛО
+Пример: /set_suggestion_reactions 5`,
+          { message_thread_id: threadId || undefined }
+        );
+        return;
+      }
+
+      if (value < 1 || value > 50) {
+        await tg.sendMessage(
+          chatId,
+          "Значение должно быть от 1 до 50",
+          { message_thread_id: threadId || undefined }
+        );
+        return;
+      }
+
+      await storage.setMinSuggestionReactions(chatId, value);
+
+      await tg.sendMessage(
+        chatId,
+        `Минимум реакций для предложений: ${value}`,
+        { message_thread_id: threadId || undefined }
+      );
+      return;
+    }
+
     // Schedule configuration: /schedule_daily 17, /schedule_weekly 0 17 (day hour), /schedule_monthly 1 17 (per-community)
     const scheduleMatch = command.match(/^\/schedule_(daily|weekly|monthly)$/);
     if (scheduleMatch && isAdmin) {
@@ -1541,6 +1596,7 @@ ${modesList}
       const currentMode = await storage.getContentMode(chatId);
       const modeInfo = CONTENT_MODES[currentMode];
       const acceptLinks = await storage.get(`community:${chatId}:settings:accept_links`);
+      const minSuggestionReactions = await storage.getMinSuggestionReactions(chatId);
       const communityName = config.name || `ID: ${chatId}`;
       await tg.sendMessage(
         chatId,
@@ -1588,7 +1644,8 @@ ${modesList}
 Предложения тем (для всех)
 /suggest — предложить тему
 /suggestions — список предложений
-Темы с 3+ реакциями попадают в опрос
+Мин. реакций: ${minSuggestionReactions}
+/set_suggestion_reactions — изменить
 
 Сообщества
 /register_community — зарегистрировать
@@ -1885,9 +1942,10 @@ ${formatChallenge(monthly, "Месячный")}`;
 
       if (!textAfterCommand) {
         const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
+        const minReactionsHelp = await storage.getMinSuggestionReactions(chatId);
         await tg.sendMessage(
           chatId,
-          `💡 Предложите тему для ${typeNames[type]} челленджа\n\nФормат: /suggest Название | Описание\n\nПример:\n/suggest Котики в космосе | Милые котики покоряют галактику в стиле ретро-футуризма\n\nЕсли тема наберёт 3+ реакций до начала голосования, она попадёт в следующий опрос!`,
+          `💡 Предложите тему для ${typeNames[type]} челленджа\n\nФормат: /suggest Название | Описание\n\nПример:\n/suggest Котики в космосе | Милые котики покоряют галактику в стиле ретро-футуризма\n\nЕсли тема наберёт ${minReactionsHelp}+ реакций до начала голосования, она попадёт в следующий опрос!`,
           { message_thread_id: threadId || undefined },
         );
         return;
@@ -1931,12 +1989,15 @@ ${formatChallenge(monthly, "Месячный")}`;
       // Генерация ID
       const suggestionId = `${Date.now()}_${Math.floor(Math.random() * 1000)}`;
 
+      // Получаем настройку минимума реакций для этого сообщества
+      const minReactions = await storage.getMinSuggestionReactions(chatId);
+
       // Публикуем предложение как отдельное сообщение
       const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
       const authorName = message.from?.username ? `@${message.from.username}` : message.from?.first_name || "Аноним";
       const suggestionMsg = await tg.sendMessage(
         chatId,
-        `💡 ПРЕДЛОЖЕНИЕ ТЕМЫ (${typeNames[type]})\n\n${title}${description !== title ? `\n${description}` : ""}\n\nАвтор: ${authorName}\n\n👍 Поставьте реакцию, если хотите такую тему!\nНужно 3+ уникальных реакций для участия в голосовании.`,
+        `💡 ПРЕДЛОЖЕНИЕ ТЕМЫ (${typeNames[type]})\n\n${title}${description !== title ? `\n${description}` : ""}\n\nАвтор: ${authorName}\n\n👍 Поставьте реакцию, если хотите такую тему!\nНужно ${minReactions}+ уникальных реакций для участия в голосовании.`,
         { message_thread_id: threadId || undefined },
       );
 
@@ -1989,6 +2050,7 @@ ${formatChallenge(monthly, "Месячный")}`;
 
       const suggestions = await storage.getSuggestions(chatId, type);
       const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
+      const minReactionsList = await storage.getMinSuggestionReactions(chatId);
 
       if (suggestions.length === 0) {
         await tg.sendMessage(
@@ -2005,12 +2067,12 @@ ${formatChallenge(monthly, "Месячный")}`;
       const sorted = [...suggestions].sort((a, b) => (b.reactionCount || 0) - (a.reactionCount || 0));
 
       for (const s of sorted) {
-        const status = (s.reactionCount || 0) >= 3 ? "✅" : "⏳";
+        const status = (s.reactionCount || 0) >= minReactionsList ? "✅" : "⏳";
         const authorName = s.username ? `@${s.username}` : "Аноним";
         msg += `${status} ${s.title} — ${s.reactionCount || 0} реакций\n   ${authorName}\n\n`;
       }
 
-      msg += `Для участия в голосовании нужно 3+ реакции.`;
+      msg += `Для участия в голосовании нужно ${minReactionsList}+ реакции.`;
 
       await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
       return;
@@ -2303,7 +2365,8 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     // ============================================
     // ДОБАВЛЯЕМ ОДОБРЕННЫЕ ПРЕДЛОЖЕНИЯ ПОЛЬЗОВАТЕЛЕЙ
     // ============================================
-    const approvedSuggestions = await storage.getApprovedSuggestions(chatId, type, 3);
+    const minReactionsPoll = await storage.getMinSuggestionReactions(chatId);
+    const approvedSuggestions = await storage.getApprovedSuggestions(chatId, type, minReactionsPoll);
 
     // Формируем из предложений строки в формате "Название | Описание"
     const suggestionThemes = approvedSuggestions.map((s) => `${s.title} | ${s.description}`);
