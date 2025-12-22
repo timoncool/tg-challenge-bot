@@ -624,7 +624,8 @@ async function handleMessage(update, env, config, tg, storage) {
 /finish_monthly — завершить месячный
 
 📈 Статус:
-/status — текущее состояние всех челленджей`,
+/status — текущее состояние всех челленджей
+/test_ai — проверить работу Gemini API`,
         { message_thread_id: threadId || undefined }
       );
       return;
@@ -715,6 +716,21 @@ ${formatChallenge(weekly, "• Недельный")}
 ${formatChallenge(monthly, "• Месячный")}`;
 
       await tg.sendMessage(chatId, statusMsg, { message_thread_id: threadId || undefined });
+      return;
+    }
+
+    // Admin: Test Gemini API
+    if (command === "/test_ai" && isAdmin) {
+      await tg.sendMessage(chatId, "⏳ Тестирую Gemini API...", { message_thread_id: threadId || undefined });
+      try {
+        const themes = await generateThemes(env.GEMINI_API_KEY, "daily");
+        const isGenerated = themes[0] !== "Кот-астронавт | Пушистый кот в скафандре чинит космический корабль среди звёзд";
+        const status = isGenerated ? "✅ AI работает!" : "⚠️ Используются заглушки (AI не ответил)";
+        const themesPreview = themes.slice(0, 3).map((t, i) => `${i + 1}. ${t}`).join("\n");
+        await tg.sendMessage(chatId, `${status}\n\nПримеры тем:\n${themesPreview}`, { message_thread_id: threadId || undefined });
+      } catch (e) {
+        await tg.sendMessage(chatId, `❌ Ошибка AI: ${e.message}`, { message_thread_id: threadId || undefined });
+      }
       return;
     }
 
@@ -1253,7 +1269,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.8.0",
+          version: "1.8.1",
         }),
         {
           headers: { "Content-Type": "application/json" },
