@@ -1110,23 +1110,31 @@ export default {
 
     // Info (protected with ADMIN_SECRET)
     if (url.pathname === "/info") {
-      const authHeader = request.headers.get("Authorization");
-      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
+      try {
+        const authHeader = request.headers.get("Authorization");
+        if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        const config = getConfig(env);
+        return new Response(
+          JSON.stringify({
+            configured: !!env.BOT_TOKEN,
+            chat_id: config.chatId,
+            topics: config.topics,
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      } catch (e) {
+        console.error("Info error:", e);
+        return new Response(JSON.stringify({ error: e.message }), {
+          status: 500,
           headers: { "Content-Type": "application/json" },
         });
       }
-
-      const config = getConfig(env);
-      return new Response(
-        JSON.stringify({
-          configured: !!env.BOT_TOKEN,
-          chat_id: config.chatId,
-          topics: config.topics,
-        }),
-        { headers: { "Content-Type": "application/json" } },
-      );
     }
 
     // Webhook
