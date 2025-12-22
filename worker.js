@@ -1091,7 +1091,7 @@ ${previousThemesNote}
     console.log("Gemini API request starting...", { type, hasApiKey: !!apiKey, keyLength: apiKey?.length });
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`,
       {
         method: "POST",
         headers: {
@@ -1770,7 +1770,7 @@ ${formatChallenge(monthly, "Месячный")}`;
         const apiKey = env.GEMINI_API_KEY;
 
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`,
           {
             method: "POST",
             headers: {
