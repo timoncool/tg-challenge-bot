@@ -2567,12 +2567,8 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
 
         // Find matching full theme from stored options
-        // Use startsWith because Telegram truncates poll options to ~100 chars
         const matchingFull = poll.options.find(
-          (o) => {
-            const short = parseTheme(o).short;
-            return short === winnerShort || short.startsWith(winnerShort.replace(/\.{3}$/, ""));
-          },
+          (o) => parseTheme(o).short === winnerShort,
         );
         if (matchingFull) {
           const parsed = parseTheme(matchingFull);
