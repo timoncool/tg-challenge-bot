@@ -935,6 +935,59 @@ async function handleReactionCount(update, env, config, storage) {
   }
 }
 
+// Handle individual reaction updates (when reaction authors are visible)
+async function handleReaction(update, env, config, storage) {
+  try {
+    const reaction = update.message_reaction;
+    if (!reaction) return;
+    if (reaction.chat.id !== config.chatId) return;
+
+    const threadId = reaction.message_thread_id;
+    const challengeType = await storage.isActiveTopic(threadId);
+
+    if (!challengeType) return;
+
+    const challenge = await storage.getChallenge(challengeType);
+    if (!challenge?.status === "active" || Date.now() >= challenge.endsAt) return;
+
+    // Count valid reactions in new_reaction
+    let userScore = 0;
+    for (const r of reaction.new_reaction || []) {
+      if (r.type === "emoji" && r.emoji !== EXCLUDED_EMOJI) {
+        userScore += 1;
+      } else if (r.type === "custom_emoji" || r.type === "paid") {
+        userScore += 1;
+      }
+    }
+
+    // Store this user's reaction count for this message
+    const userId = reaction.user?.id;
+    if (!userId) return;
+
+    const reactionsKey = `reactions:${challengeType}:${challenge.id}:${reaction.message_id}`;
+    const reactionsMap = (await storage.get(reactionsKey)) || {};
+    reactionsMap[userId] = userScore;
+    await storage.set(reactionsKey, reactionsMap);
+
+    // Calculate total score from all users
+    const totalScore = Object.values(reactionsMap).reduce((sum, s) => sum + s, 0);
+
+    await storage.updateSubmissionScore(
+      challengeType,
+      challenge.id,
+      reaction.message_id,
+      totalScore,
+    );
+
+    console.log(`Reaction update: msg=${reaction.message_id}, user=${userId}, score=${totalScore}`);
+  } catch (e) {
+    console.error("handleReaction error:", {
+      error: e.message,
+      stack: e.stack,
+    });
+  }
+}
+
 // ============================================
 // CRON JOBS
 // ============================================
@@ -1200,7 +1253,7 @@ export default {
         JSON.stringify({
           status: "ok",
           bot: "TG Challenge Bot",
-          version: "1.7.3",
+          version: "1.8.0",
         }),
         {
           headers: { "Content-Type": "application/json" },
@@ -1462,6 +1515,8 @@ export default {
 
         if (update.message) {
           await handleMessage(update, env, config, tg, storage);
+        } else if (update.message_reaction) {
+          await handleReaction(update, env, config, storage);
         } else if (update.message_reaction_count) {
           await handleReactionCount(update, env, config, storage);
         }
