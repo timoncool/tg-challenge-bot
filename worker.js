@@ -1134,27 +1134,33 @@ ${previousThemesNote}
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
     if (!text) {
-      console.error("Gemini API empty response:", {
-        hasCandiates: !!data.candidates,
-        candidatesLength: data.candidates?.length,
-        error: data.error,
-        promptFeedback: data.promptFeedback
-      });
+      // Показываем почему нет ответа
+      const reason = data.promptFeedback?.blockReason
+        || data.error?.message
+        || (data.candidates?.length === 0 ? "no candidates" : "unknown");
+      throw new Error(`API пустой ответ: ${reason}. Data: ${JSON.stringify(data).substring(0, 300)}`);
     }
 
     // Parse lines in format "Short | Full"
     const themes = text
       .split("\n")
       .map((l) => l.trim())
-      .filter((l) => l.includes("|") && l.length > 5)
+      .filter((l) => {
+        if (!l.includes("|") || l.length < 10) return false;
+        // Исключаем markdown таблицы
+        if (l.startsWith("|") || l.startsWith("-") || l.includes("---")) return false;
+        if (l.startsWith("**") || l.startsWith("#")) return false;
+        return true;
+      })
       .slice(0, 6);
 
-    console.log("Gemini parsed themes:", themes.length);
+    console.log("Gemini parsed themes:", themes.length, "from text:", text.substring(0, 300));
 
     if (themes.length >= 6) return themes;
 
-    // Не хватает тем - выбрасываем ошибку, чтобы было видно что AI не работает
-    throw new Error(`AI вернул только ${themes.length} тем вместо 6. Проверьте API ключ и промпт.`);
+    // Не хватает тем - показываем что вернул AI
+    const preview = text.substring(0, 500).replace(/\n/g, " ");
+    throw new Error(`AI: ${themes.length}/6 тем. Ответ: ${preview}`);
   } catch (e) {
     console.error("Gemini AI error:", { message: e.message, stack: e.stack });
     throw e; // Пробрасываем ошибку наверх - никаких заглушек
