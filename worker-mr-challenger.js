@@ -10,6 +10,13 @@ const EXCLUDED_EMOJI = "🌚";
 // Максимальное количество сообществ
 const MAX_COMMUNITIES = 10;
 
+// Лимиты работ на пользователя по типам челленджей
+const SUBMISSION_LIMITS = {
+  daily: 1,
+  weekly: 3,
+  monthly: 5,
+};
+
 // Режимы контента для генерации тем
 const CONTENT_MODES = {
   vanilla: { name: "🍦 Vanilla", description: "Безопасный контент для всех возрастов" },
@@ -91,6 +98,15 @@ ${username} забирает этот раунд.
   },
 
   noSubmissions: "Тишина? Жаль. Надеюсь, вы копите силы для следующего раза.",
+  submissionLimitReached: (current, max) => {
+    const workWord = pluralize(current, "работу", "работы", "работ");
+    const maxWord = pluralize(max, "работа", "работы", "работ");
+    return `Вы уже отправили ${current} ${workWord} в этот челлендж (максимум ${max} ${maxWord})`;
+  },
+  workAccepted: (current, max) => {
+    if (max === 1) return ru.getRandomReaction();
+    return `${ru.getRandomReaction()} (${current}/${max})`;
+  },
 
   leaderboardTitle: (type) => {
     const labels = {
@@ -581,13 +597,19 @@ class Storage {
 
   async addSubmission(chatId, type, challengeId, submission) {
     const submissions = await this.getSubmissions(chatId, type, challengeId);
-    // Check both messageId (duplicate request) and userId (one submission per user)
-    if (submissions.some((s) => s.messageId === submission.messageId || s.userId === submission.userId)) {
-      return false; // Already exists
+    // Check for duplicate message
+    if (submissions.some((s) => s.messageId === submission.messageId)) {
+      return { success: false, reason: "duplicate" };
+    }
+    // Count user's submissions and check limit
+    const userSubmissions = submissions.filter((s) => s.userId === submission.userId);
+    const limit = SUBMISSION_LIMITS[type] || 1;
+    if (userSubmissions.length >= limit) {
+      return { success: false, reason: "limit", current: userSubmissions.length, max: limit };
     }
     submissions.push(submission);
     await this.set(this._key(chatId, "submissions", type, challengeId), submissions);
-    return true; // Successfully added
+    return { success: true, current: userSubmissions.length + 1, max: limit };
   }
 
   async updateSubmissionScore(chatId, type, challengeId, messageId, score) {
@@ -2070,25 +2092,8 @@ ${descriptionText}
         return; // Silently reject
       }
 
-      // Check for duplicate
-      const submissions = await storage.getSubmissions(
-        chatId,
-        challengeType,
-        challenge.id,
-      );
-      if (submissions.some((s) => s.userId === message.from?.id)) {
-        await tg.sendMessage(
-          chatId,
-          "Вы уже отправили работу в этот челлендж",
-          {
-            message_thread_id: threadId || undefined,
-            reply_to_message_id: message.message_id,
-          },
-        );
-        return;
-      }
-
-      await storage.addSubmission(chatId, challengeType, challenge.id, {
+      // Try to add submission (handles duplicates and limits)
+      const result = await storage.addSubmission(chatId, challengeType, challenge.id, {
         messageId: message.message_id,
         userId: message.from?.id,
         username: message.from?.username || message.from?.first_name,
@@ -2096,8 +2101,23 @@ ${descriptionText}
         timestamp: Date.now(),
       });
 
+      if (!result.success) {
+        if (result.reason === "limit") {
+          await tg.sendMessage(
+            chatId,
+            ru.submissionLimitReached(result.current, result.max),
+            {
+              message_thread_id: threadId || undefined,
+              reply_to_message_id: message.message_id,
+            },
+          );
+        }
+        // For duplicates, silently ignore
+        return;
+      }
+
       // Confirmation message - случайная реплика Mr. Challenger
-      await tg.sendMessage(chatId, ru.getRandomReaction(), {
+      await tg.sendMessage(chatId, ru.workAccepted(result.current, result.max), {
         message_thread_id: threadId || undefined,
         reply_to_message_id: message.message_id,
       });
