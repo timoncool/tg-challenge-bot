@@ -777,6 +777,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 3-4 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -812,6 +814,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 3-4 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -847,6 +851,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 4-5 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -884,6 +890,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 3-4 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -918,6 +926,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 3-4 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -952,6 +962,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 4-5 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -991,6 +1003,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 3-4 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -1027,6 +1041,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 3-4 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -1063,6 +1079,8 @@ ${previousThemesNote}
 <format>
 Выведи ТОЛЬКО 6 тем, каждая на новой строке в формате:
 Заголовок-предложение | Описание из 4-5 предложений
+
+ВАЖНО: НЕ используй markdown, таблицы, заголовки или другое форматирование. Только простой текст.
 </format>
 
 <examples_for_format_only>
@@ -1675,43 +1693,19 @@ ${formatChallenge(monthly, "Месячный")}`;
       return;
     }
 
-    // Admin: Test Gemini API - показывает RAW ответ для диагностики
+    // Admin: Test Gemini API - тестирует боевой промпт для 6 тем
     if (command === "/test_ai" && isAdmin) {
-      await tg.sendMessage(chatId, "Тестирую Gemini API...", { message_thread_id: threadId || undefined });
+      await tg.sendMessage(chatId, "Тестирую Gemini API с боевым промптом...", { message_thread_id: threadId || undefined });
       try {
         const contentMode = await storage.getContentMode(chatId);
-        const testPrompt = "Придумай 3 темы для арт-челленджа. Формат: Название | Описание";
+        const themes = await generateThemes(env.GEMINI_API_KEY, "daily", "ru", [], contentMode);
 
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-goog-api-key": env.GEMINI_API_KEY,
-            },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: testPrompt }] }],
-              generationConfig: { temperature: 1.0, maxOutputTokens: 500 },
-            }),
-          },
-        );
+        let msg = `✅ Gemini API (режим: ${contentMode})\n\n`;
+        themes.forEach((theme, i) => {
+          msg += `${i + 1}. ${theme}\n\n`;
+        });
 
-        const status = response.status;
-        const data = await response.json();
-
-        let msg = `Gemini API (${status}) режим: ${contentMode}\n\n`;
-
-        if (data.error) {
-          msg += `❌ Ошибка: ${data.error.message || JSON.stringify(data.error)}`;
-        } else if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-          const text = data.candidates[0].content.parts[0].text;
-          msg += `✅ Ответ:\n${text.substring(0, 800)}`;
-        } else {
-          msg += `⚠️ Пустой ответ: ${JSON.stringify(data).substring(0, 500)}`;
-        }
-
-        await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
+        await tg.sendMessage(chatId, msg.substring(0, 4000), { message_thread_id: threadId || undefined });
       } catch (e) {
         await tg.sendMessage(chatId, `❌ Ошибка: ${e.message}`, { message_thread_id: threadId || undefined });
       }
