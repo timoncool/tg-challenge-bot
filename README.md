@@ -9,19 +9,6 @@
 [![GitHub stars](https://img.shields.io/github/stars/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/network/members)
 
-**Ключевые слова:** telegram bot, ai art challenge, midjourney, flux, ideogram, dall-e, stable diffusion, neural art, serverless bot, cloudflare workers, творческий челлендж, нейро-арт, конкурс изображений
-
----
-
-## 📁 Файлы
-
-| Файл | Описание |
-|------|----------|
-| `worker.js` | Чистый ванильный код — разверните и настройте под своё сообщество |
-| `worker-mr-challenger.js` | Пример кастомизации с персонажем и стилем |
-
----
-
 ## ✨ Возможности
 
 - 🏘️ **Мульти-сообщества**: один бот обслуживает до 10 групп
@@ -371,6 +358,15 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
 - Cloudflare Workers: 100K запросов/день бесплатно
 - KV: 100K операций/день бесплатно
 - Google AI: бесплатный tier достаточен
+
+---
+
+## 📁 Файлы
+
+| Файл | Описание |
+|------|----------|
+| `worker.js` | Чистый ванильный код — разверните и настройте под своё сообщество |
+| `worker-mr-challenger.js` | Пример кастомизации с персонажем и стилем |
 
 ---
 
