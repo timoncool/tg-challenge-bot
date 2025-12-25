@@ -48,6 +48,12 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;");
 }
 
+// Strip HTML tags (for polls which don't support HTML)
+function stripHtml(text) {
+  if (!text) return "";
+  return String(text).replace(/<[^>]*>/g, "");
+}
+
 const fmt = {
   b: (text) => `<b>${escapeHtml(text)}</b>`,
   i: (text) => `<i>${escapeHtml(text)}</i>`,
@@ -81,6 +87,24 @@ function getRandomReaction() {
   return submissionReactions[Math.floor(Math.random() * submissionReactions.length)];
 }
 
+// Реплики Mr. Challenger для победителей
+const winnerPhrases = [
+  "Отличное исполнение. 🎩",
+  "Заслуженно. Браво. 👏",
+  "Мастерская работа.",
+  "Сообщество выбрало. Я согласен.",
+  "Впечатляет. Так держать.",
+  "Класс. Жду в следующем раунде.",
+  "Чистая победа. 🏆",
+  "Талант виден. Уважаю.",
+  "Сильно. Очень сильно.",
+  "Вот это уровень. 🔥",
+];
+
+function getRandomWinnerPhrase() {
+  return winnerPhrases[Math.floor(Math.random() * winnerPhrases.length)];
+}
+
 const ru = {
   challengeTypes: {
     daily: "⚡ Челлендж дня",
@@ -105,7 +129,7 @@ const ru = {
 Прием работ открыт до ${endDate}.
 
 💎 <b>ЗАДАНИЕ:</b>
-${escapeHtml(topic)}
+${topic}
 
 Жду ваши работы в этом треде.
 Ценим стиль, идею и качество исполнения.
@@ -119,8 +143,8 @@ ${escapeHtml(topic)}
 Автор: ${escapeHtml(username)}
 Оценка сообщества: <b>${score}</b> ✨
 
-<i>Тема была: ${escapeHtml(topic)}</i>
-Отличное исполнение.`;
+<i>Тема была: ${stripHtml(topic)}</i>
+${getRandomWinnerPhrase()}`;
   },
   winnerAnnouncement: (username, score, type) => {
     return `🥂 <b>ПОБЕДИТЕЛЬ</b>
@@ -128,7 +152,7 @@ ${escapeHtml(topic)}
 ${escapeHtml(username)} забирает этот раунд.
 Результат: <b>${score}</b> голосов.
 
-Достойно. Моё уважение.`;
+${getRandomWinnerPhrase()}`;
   },
   noSubmissions: "🤔 <i>Тишина? Жаль. Надеюсь, вы копите силы для следующего раза.</i>",
   submissionLimitReached: (current, max) => {
@@ -479,12 +503,13 @@ class TelegramAPI {
   }
 
   async sendPoll(chatId, question, options, params = {}) {
-    // Telegram limit: 1-100 characters per option
+    // Strip HTML tags (polls don't support HTML) and truncate to 100 chars
     options = options.map((opt) => {
-      if (opt.length > 100) {
-        return opt.substring(0, 97) + "...";
+      const clean = stripHtml(opt);
+      if (clean.length > 100) {
+        return clean.substring(0, 97) + "...";
       }
-      return opt;
+      return clean;
     });
 
     return this.request("sendPoll", {
@@ -1499,7 +1524,14 @@ ${formatChallenge(monthly, "Месячный")}`;
         неделя: "weekly",
         месяц: "monthly",
       };
-      const type = typeMap[args[1]?.toLowerCase()] || "daily";
+      // Detect type from argument or topic
+      let type = typeMap[args[1]?.toLowerCase()];
+      if (!type && threadId && config) {
+        if (config.topics.daily === threadId) type = "daily";
+        else if (config.topics.weekly === threadId) type = "weekly";
+        else if (config.topics.monthly === threadId) type = "monthly";
+      }
+      if (!type) type = "daily";
 
       const leaderboard = await storage.getLeaderboard(chatId, type);
       if (leaderboard.length === 0) {
