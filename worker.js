@@ -48,6 +48,12 @@ function escapeHtml(text) {
     .replace(/>/g, "&gt;");
 }
 
+// Strip HTML tags (for polls which don't support HTML)
+function stripHtml(text) {
+  if (!text) return "";
+  return String(text).replace(/<[^>]*>/g, "");
+}
+
 const fmt = {
   b: (text) => `<b>${escapeHtml(text)}</b>`,
   i: (text) => `<i>${escapeHtml(text)}</i>`,
@@ -92,7 +98,8 @@ const ru = {
     return `${emoji[type]} <b>${labels[type]}</b>
 ${startDate} — ${endDate}${voteLine}
 
-${escapeHtml(topic)}
+💎 <b>ЗАДАНИЕ:</b>
+${topic}
 
 📸 Отправьте изображение в эту тему
 🏆 Лучшая работа — по реакциям
@@ -112,7 +119,7 @@ ${escapeHtml(topic)}
 
 ${escapeHtml(username)} — <b>${score}</b> реакций
 
-<i>${escapeHtml(topic)}</i>`;
+<i>${stripHtml(topic)}</i>`;
   },
   winnerAnnouncement: (username, score, type) => {
     const labels = {
@@ -475,12 +482,13 @@ class TelegramAPI {
   }
 
   async sendPoll(chatId, question, options, params = {}) {
-    // Telegram limit: 1-100 characters per option
+    // Strip HTML tags (polls don't support HTML) and truncate to 100 chars
     options = options.map((opt) => {
-      if (opt.length > 100) {
-        return opt.substring(0, 97) + "...";
+      const clean = stripHtml(opt);
+      if (clean.length > 100) {
+        return clean.substring(0, 97) + "...";
       }
-      return opt;
+      return clean;
     });
 
     return this.request("sendPoll", {
@@ -1507,7 +1515,15 @@ ${formatChallenge(monthly, "👑 Месячный")}`;
         неделя: "weekly",
         месяц: "monthly",
       };
-      const type = typeMap[args[1]?.toLowerCase()] || "daily";
+
+      // Detect type from argument or topic
+      let type = typeMap[args[1]?.toLowerCase()];
+      if (!type && threadId && config) {
+        if (config.topics.daily === threadId) type = "daily";
+        else if (config.topics.weekly === threadId) type = "weekly";
+        else if (config.topics.monthly === threadId) type = "monthly";
+      }
+      if (!type) type = "daily";
 
       const leaderboard = await storage.getLeaderboard(chatId, type);
       if (leaderboard.length === 0) {
