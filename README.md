@@ -1,8 +1,27 @@
 # 🎯 TG Challenge Bot
 
-Telegram-бот для проведения творческих челленджей в сообществах нейро-арта (Midjourney, Stable Diffusion, DALL-E, Flux и др.)
+> Telegram-бот для проведения творческих челленджей в сообществах нейро-арта (Midjourney, Stable Diffusion, DALL-E, Flux, Sora и др.)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white)](https://core.telegram.org/bots)
+[![Google AI](https://img.shields.io/badge/Google-Gemini_AI-4285F4?logo=google&logoColor=white)](https://ai.google.dev/)
+[![GitHub stars](https://img.shields.io/github/stars/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/network/members)
+
+**Ключевые слова:** telegram bot, ai art challenge, midjourney community, stable diffusion contest, dall-e competition, flux art, neural art, serverless bot, cloudflare workers, gemini ai, творческий челлендж, нейро-арт, конкурс изображений
+
+---
+
+## 🤖 Примеры использования
+
+| Бот | Описание |
+|-----|----------|
+| [@mr_challenger_bot](https://t.me/mr_challenger_bot) | **Мистер Челленджер** — кастомизированный бот для сообщества [Nerual Dreaming](https://t.me/nerual_dreming) |
+
+> 💡 `worker.js` — это чистый ванильный код без кастомизации. Разверните его и настройте под своё сообщество!
+
+---
 
 ## ✨ Возможности
 
@@ -18,6 +37,8 @@ Telegram-бот для проведения творческих челленд�
 - 💡 **Предложение тем**: участники могут предлагать свои темы
 - 🎭 **Режимы контента**: vanilla / medium / nsfw
 - ☁️ **Serverless**: работает на Cloudflare Workers (бесплатно!)
+
+---
 
 ## 📋 Требования
 
@@ -44,7 +65,7 @@ Telegram-бот для проведения творческих челленд�
 ### Шаг 3: Создайте Worker в Cloudflare
 
 1. [Cloudflare Dashboard](https://dash.cloudflare.com) → **Workers & Pages** → **Create Worker**
-2. Дайте имя → **Deploy**
+2. Дайте имя (например: `challenge-bot`) → **Deploy**
 3. **Edit Code** → вставьте код из `worker.js` → **Deploy**
 
 ### Шаг 4: Создайте KV хранилище
@@ -56,13 +77,16 @@ Telegram-бот для проведения творческих челленд�
 
 ### Шаг 5: Добавьте секреты
 
-**Settings** → **Variables and Secrets** → **Add** (Encrypt):
+**Settings** → **Variables and Secrets** → **Add** (тип: **Encrypt**):
 
-| Name | Value |
-|------|-------|
-| `BOT_TOKEN` | Токен от BotFather |
-| `GEMINI_API_KEY` | API-ключ Google AI |
-| `ADMIN_SECRET` | Любой пароль для HTTP API |
+| Имя | Значение | Обязательно |
+|-----|----------|-------------|
+| `BOT_TOKEN` | Токен от BotFather | ✅ Да |
+| `GEMINI_API_KEY` | API-ключ Google AI | ✅ Да |
+| `ADMIN_SECRET` | Любой пароль для HTTP API | ✅ Да |
+| `WEBHOOK_SECRET` | Секрет для проверки webhook (любая строка) | ⬜ Нет |
+
+> 💡 `WEBHOOK_SECRET` повышает безопасность, проверяя что запросы приходят именно от Telegram.
 
 ### Шаг 6: Настройте расписание
 
@@ -87,7 +111,29 @@ Telegram будет автоматически отправлять команд
 
 ### Шаг 7: Активируйте webhook
 
-Откройте: `https://ваш-worker.workers.dev/setup`
+Откройте в браузере:
+
+```
+https://ваш-worker.workers.dev/setup
+```
+
+Или используйте curl:
+
+```bash
+curl https://ваш-worker.workers.dev/setup
+```
+
+Если установлен `ADMIN_SECRET`:
+
+```bash
+curl -H "Authorization: Bearer ВАШ_ADMIN_SECRET" \
+     https://ваш-worker.workers.dev/setup
+```
+
+Ответ при успехе:
+```json
+{"success": true, "webhook": "https://ваш-worker.workers.dev/webhook"}
+```
 
 ### Шаг 8: Добавьте бота в группы
 
@@ -205,14 +251,94 @@ Telegram будет автоматически отправлять команд
 
 Все запросы требуют заголовок: `Authorization: Bearer {ADMIN_SECRET}`
 
-| Endpoint | Описание |
-|----------|----------|
-| `GET /info` | Информация о всех сообществах |
-| `GET /admin/status` | Список всех сообществ |
-| `GET /admin/status?chat_id=ID` | Статус конкретного сообщества |
-| `POST /admin/poll/{type}?chat_id=ID` | Создать опрос |
-| `POST /admin/start/{type}?chat_id=ID` | Запустить челлендж |
-| `POST /admin/finish/{type}?chat_id=ID` | Завершить челлендж |
+### Эндпоинты
+
+| Метод | Endpoint | Описание |
+|-------|----------|----------|
+| `GET` | `/` или `/health` | Проверка работоспособности |
+| `GET` | `/setup` | Настройка webhook |
+| `GET` | `/info` | Информация о всех сообществах |
+| `GET` | `/admin/status` | Список всех сообществ |
+| `GET` | `/admin/status?chat_id=ID` | Статус конкретного сообщества |
+| `POST` | `/admin/poll/{type}?chat_id=ID` | Создать опрос (type: daily/weekly/monthly) |
+| `POST` | `/admin/start/{type}?chat_id=ID` | Запустить челлендж |
+| `POST` | `/admin/finish/{type}?chat_id=ID` | Завершить челлендж |
+
+### Примеры curl
+
+**Проверка работоспособности:**
+
+```bash
+curl https://ваш-worker.workers.dev/health
+```
+
+**Получить статус всех сообществ:**
+
+```bash
+curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
+     https://ваш-worker.workers.dev/admin/status
+```
+
+**Получить статус конкретного сообщества:**
+
+```bash
+curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
+     "https://ваш-worker.workers.dev/admin/status?chat_id=-1001234567890"
+```
+
+**Создать опрос дневного челленджа:**
+
+```bash
+curl -X POST \
+     -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
+     "https://ваш-worker.workers.dev/admin/poll/daily?chat_id=-1001234567890"
+```
+
+**Запустить челлендж (закрыть опрос):**
+
+```bash
+curl -X POST \
+     -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
+     "https://ваш-worker.workers.dev/admin/start/daily?chat_id=-1001234567890"
+```
+
+**Завершить челлендж (подвести итоги):**
+
+```bash
+curl -X POST \
+     -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
+     "https://ваш-worker.workers.dev/admin/finish/daily?chat_id=-1001234567890"
+```
+
+**Получить информацию о сообществах:**
+
+```bash
+curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
+     https://ваш-worker.workers.dev/info
+```
+
+### Пример ответа `/admin/status?chat_id=...`
+
+```json
+{
+  "chatId": -1001234567890,
+  "challenges": {
+    "daily": {
+      "theme": "Киберпанк-город",
+      "startedAt": "2025-01-15T10:00:00Z",
+      "participants": 12
+    },
+    "weekly": null,
+    "monthly": null
+  },
+  "polls": {
+    "daily": false,
+    "weekly": true,
+    "monthly": false
+  },
+  "activeTopics": [123, 456]
+}
+```
 
 ---
 
@@ -220,8 +346,8 @@ Telegram будет автоматически отправлять команд
 
 ### Бот не отвечает
 1. Проверьте, что бот — администратор группы
-2. Проверьте webhook: `/setup`
-3. Проверьте логи в Cloudflare Dashboard
+2. Проверьте webhook: откройте `/setup`
+3. Проверьте логи в Cloudflare Dashboard → Workers → Logs
 
 ### Как добавить новую группу?
 Добавьте бота в группу → `/register_community` → настройте топики
@@ -231,6 +357,9 @@ Telegram будет автоматически отправлять команд
 
 ### Как получить ID топика?
 Напишите `/topic_id` в нужной теме.
+
+### Как получить ID группы (chat_id)?
+Напишите `/register_community` — бот покажет ID группы.
 
 ### Как изменить время челленджей?
 Через команды в группе:
@@ -256,3 +385,29 @@ MIT — используйте свободно!
 
 - [Cloudflare Workers](https://workers.cloudflare.com/) — бесплатный serverless
 - [Google AI](https://ai.google.dev/) — генерация тем через Gemini
+
+---
+
+## ⭐ Star History
+
+<a href="https://star-history.com/#timoncool/tg-challenge-bot&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=Date" />
+ </picture>
+</a>
+
+---
+
+<div align="center">
+
+### 🚀 Создано [Nerual Dreaming](https://t.me/nerual_dreming)
+
+Основатель [ArtGeneration.me](https://artgeneration.me/) • [YouTube](https://www.youtube.com/@nerual_dreming) • Нейро-евангелист
+
+<a href="https://t.me/nerual_dreming"><img src="https://img.shields.io/badge/Telegram-Nerual_Dreaming-26A5E4?logo=telegram&logoColor=white&style=for-the-badge" alt="Telegram" /></a>
+<a href="https://artgeneration.me/"><img src="https://img.shields.io/badge/Web-ArtGeneration.me-FF6B6B?style=for-the-badge" alt="ArtGeneration" /></a>
+<a href="https://www.youtube.com/@nerual_dreming"><img src="https://img.shields.io/badge/YouTube-Nerual_Dreaming-FF0000?logo=youtube&logoColor=white&style=for-the-badge" alt="YouTube" /></a>
+
+</div>
