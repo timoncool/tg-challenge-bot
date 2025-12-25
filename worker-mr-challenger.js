@@ -66,15 +66,15 @@ const fmt = {
 
 // Реплики Mr. Challenger для подтверждения работ
 const submissionReactions = [
-  "Принято. Выглядит стильно. 🍷",
-  "О, интересная работа. Засчитано.",
-  "Вижу. Ты в деле.",
-  "Отличный кадр. Добавил в список.",
-  "Достойно. Участвуешь.",
-  "Принято. Ждем оценки остальных.",
-  "Сохранил. Выглядит качественно.",
-  "Есть контакт. Работа в игре.",
-  "Хорошо вышло. Записано.",
+  "✅ <b>Принято.</b> Выглядит стильно. 🍷",
+  "🎯 О, <i>интересная работа</i>. Засчитано.",
+  "👁️ Вижу. <b>Ты в деле.</b>",
+  "📸 Отличный кадр. <i>Добавил в список.</i>",
+  "✨ Достойно. <b>Участвуешь.</b>",
+  "✅ Принято. <i>Ждем оценки остальных.</i>",
+  "💾 Сохранил. <b>Выглядит качественно.</b>",
+  "🎯 Есть контакт. <i>Работа в игре.</i>",
+  "👌 Хорошо вышло. <b>Записано.</b>",
 ];
 
 function getRandomReaction() {
@@ -948,11 +948,11 @@ async function handleMessage(update, env, tg, storage) {
 
       const result = await addCommunity(storage, chatId, name);
       if (result.success) {
-        await tg.sendMessage(chatId, `✅ Сообщество зарегистрировано!\n\nНазвание: ${name}\nID: ${chatId}\nВсего сообществ: ${result.count}/${MAX_COMMUNITIES}\n\nТеперь настройте топики:\n/set_daily — тема дневных челленджей\n/set_weekly — тема недельных\n/set_monthly — тема месячных\n/set_winners — тема победителей`, {
+        await tg.sendHtml(chatId, `✅ <b>Сообщество зарегистрировано.</b> Принято.\n\n<b>Название:</b> ${escapeHtml(name)}\n<b>ID:</b> <code>${chatId}</code>\n<b>Всего сообществ:</b> ${result.count}/${MAX_COMMUNITIES}\n\n<b>Настройте топики:</b>\n<code>/set_daily</code> — дневные\n<code>/set_weekly</code> — недельные\n<code>/set_monthly</code> — месячные\n<code>/set_winners</code> — победители`, {
           message_thread_id: threadId || undefined,
         });
       } else {
-        await tg.sendMessage(chatId, `❌ ${result.error}`, {
+        await tg.sendHtml(chatId, `❌ <b>Ошибка:</b> ${escapeHtml(result.error)}`, {
           message_thread_id: threadId || undefined,
         });
       }
@@ -965,16 +965,16 @@ async function handleMessage(update, env, tg, storage) {
       const list = Object.values(communities);
 
       if (list.length === 0) {
-        await tg.sendMessage(chatId, `Нет зарегистрированных сообществ.\n\nИспользуйте /register_community для регистрации.`, {
+        await tg.sendHtml(chatId, `📭 Нет зарегистрированных сообществ.\n\n<code>/register_community</code> — добавить`, {
           message_thread_id: threadId || undefined,
         });
       } else {
-        let msg = `СООБЩЕСТВА (${list.length}/${MAX_COMMUNITIES})\n\n`;
+        let msg = `📋 <b>СООБЩЕСТВА</b> (${list.length}/${MAX_COMMUNITIES})\n\n`;
         for (const c of list) {
-          const isCurrent = c.chatId === chatId ? " ← текущее" : "";
-          msg += `• ${c.name}${isCurrent}\n  ID: ${c.chatId}\n`;
+          const isCurrent = c.chatId === chatId ? " ← <i>текущее</i>" : "";
+          msg += `• <b>${escapeHtml(c.name)}</b>${isCurrent}\n  <code>${c.chatId}</code>\n`;
         }
-        await tg.sendMessage(chatId, msg, {
+        await tg.sendHtml(chatId, msg, {
           message_thread_id: threadId || undefined,
         });
       }
@@ -985,11 +985,11 @@ async function handleMessage(update, env, tg, storage) {
     if (command === "/unregister_community" && isAdmin) {
       const result = await removeCommunity(storage, chatId);
       if (result.success) {
-        await tg.sendMessage(chatId, `✅ Сообщество удалено из бота.`, {
+        await tg.sendHtml(chatId, `✅ <b>Сообщество удалено.</b> Готово.`, {
           message_thread_id: threadId || undefined,
         });
       } else {
-        await tg.sendMessage(chatId, `❌ ${result.error}`, {
+        await tg.sendHtml(chatId, `❌ <b>Ошибка:</b> ${escapeHtml(result.error)}`, {
           message_thread_id: threadId || undefined,
         });
       }
@@ -1002,7 +1002,7 @@ async function handleMessage(update, env, tg, storage) {
     if (!hasAccess) {
       // Для незарегистрированных сообществ — предлагаем регистрацию
       if (command.startsWith("/") && isAdmin) {
-        await tg.sendMessage(chatId, `Это сообщество не зарегистрировано.\n\nИспользуйте /register_community для регистрации.`, {
+        await tg.sendHtml(chatId, `⚠️ <i>Сообщество не зарегистрировано.</i>\n\n<code>/register_community</code> — добавить`, {
           message_thread_id: threadId || undefined,
         });
       }
@@ -1012,9 +1012,9 @@ async function handleMessage(update, env, tg, storage) {
     // Get topic ID - для настройки
     if (command === "/topic_id" && isAdmin) {
       const topicInfo = threadId
-        ? `ID темы: ${threadId}\n\nКоманды: /set_daily, /set_weekly, /set_monthly, /set_winners`
-        : "Это общий чат. Напиши команду внутри темы форума.";
-      await tg.sendMessage(chatId, topicInfo, {
+        ? `🔢 <b>ID темы:</b> <code>${threadId}</code>\n\n<b>Команды:</b>\n<code>/set_daily</code> · <code>/set_weekly</code> · <code>/set_monthly</code> · <code>/set_winners</code>`
+        : "⚠️ <i>Это общий чат. Напиши команду внутри темы форума.</i>";
+      await tg.sendHtml(chatId, topicInfo, {
         message_thread_id: threadId || undefined,
       });
       return;
@@ -1198,20 +1198,20 @@ ${modesList}
       if (type === "daily") {
         const hour = args[0];
         if (isNaN(hour) || hour < 0 || hour > 23) {
-          await tg.sendMessage(chatId, "Формат: /schedule_daily ЧАС (0-23)\nПример: /schedule_daily 17", {
+          await tg.sendHtml(chatId, "📝 <b>Формат:</b> <code>/schedule_daily ЧАС</code> (0-23)\n<b>Пример:</b> <code>/schedule_daily 17</code>", {
             message_thread_id: threadId || undefined,
           });
           return;
         }
         kvSchedule.daily = { ...kvSchedule.daily, challengeHour: hour };
         await setSchedule(storage, chatId, kvSchedule);
-        await tg.sendMessage(chatId, `Дневные челленджи: ${hour}:00`, {
+        await tg.sendHtml(chatId, `✅ <b>Дневные челленджи:</b> ${hour}:00. Записано.`, {
           message_thread_id: threadId || undefined,
         });
       } else if (type === "weekly") {
         const [day, hour] = args;
         if (isNaN(day) || day < 0 || day > 6 || isNaN(hour) || hour < 0 || hour > 23) {
-          await tg.sendMessage(chatId, "Формат: /schedule_weekly ДЕНЬ ЧАС\nДень: 0=вс, 1=пн, ..., 6=сб\nПример: /schedule_weekly 0 17", {
+          await tg.sendHtml(chatId, "📝 <b>Формат:</b> <code>/schedule_weekly ДЕНЬ ЧАС</code>\n<i>День: 0=вс, 1=пн, ..., 6=сб</i>\n<b>Пример:</b> <code>/schedule_weekly 0 17</code>", {
             message_thread_id: threadId || undefined,
           });
           return;
@@ -1219,20 +1219,20 @@ ${modesList}
         kvSchedule.weekly = { ...kvSchedule.weekly, challengeDay: day, challengeHour: hour };
         await setSchedule(storage, chatId, kvSchedule);
         const dayNames = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
-        await tg.sendMessage(chatId, `Недельные челленджи: ${dayNames[day]} ${hour}:00`, {
+        await tg.sendHtml(chatId, `✅ <b>Недельные челленджи:</b> ${dayNames[day]} ${hour}:00. Понял.`, {
           message_thread_id: threadId || undefined,
         });
       } else if (type === "monthly") {
         const [day, hour] = args;
         if (isNaN(day) || day < 1 || day > 28 || isNaN(hour) || hour < 0 || hour > 23) {
-          await tg.sendMessage(chatId, "Формат: /schedule_monthly ДЕНЬ ЧАС\nДень: 1-28\nПример: /schedule_monthly 1 17", {
+          await tg.sendHtml(chatId, "📝 <b>Формат:</b> <code>/schedule_monthly ДЕНЬ ЧАС</code>\n<i>День: 1-28</i>\n<b>Пример:</b> <code>/schedule_monthly 1 17</code>", {
             message_thread_id: threadId || undefined,
           });
           return;
         }
         kvSchedule.monthly = { ...kvSchedule.monthly, challengeDay: day, challengeHour: hour };
         await setSchedule(storage, chatId, kvSchedule);
-        await tg.sendMessage(chatId, `Месячные челленджи: ${day}-го числа в ${hour}:00`, {
+        await tg.sendHtml(chatId, `✅ <b>Месячные челленджи:</b> ${day}-го числа в ${hour}:00. Готово.`, {
           message_thread_id: threadId || undefined,
         });
       }
@@ -1263,7 +1263,7 @@ ${modesList}
 
       await storage.setSubmissionLimit(chatId, type, limit);
       const typeNames = { daily: "дневных", weekly: "недельных", monthly: "месячных" };
-      await tg.sendMessage(chatId, `✅ Лимит для ${typeNames[type]} челленджей: ${limit} работ`, {
+      await tg.sendHtml(chatId, `✅ <b>Лимит для ${typeNames[type]} челленджей:</b> ${limit} работ. Принято.`, {
         message_thread_id: threadId || undefined,
       });
       return;
@@ -1389,19 +1389,19 @@ ${modesList}
         return `${name}: до ${endDateStr}\n   ${c.topic}`;
       };
 
-      const statusMsg = `СТАТУС
+      const statusMsg = `📊 <b>СТАТУС</b>
 
-Опросы
-Дневной: ${pollDaily ? "есть" : "нет"}
-Недельный: ${pollWeekly ? "есть" : "нет"}
-Месячный: ${pollMonthly ? "есть" : "нет"}
+<b>Опросы</b>
+• Дневной: ${pollDaily ? "✅" : "❌"}
+• Недельный: ${pollWeekly ? "✅" : "❌"}
+• Месячный: ${pollMonthly ? "✅" : "❌"}
 
-Челленджи
+<b>Челленджи</b>
 ${formatChallenge(daily, "Дневной")}
 ${formatChallenge(weekly, "Недельный")}
 ${formatChallenge(monthly, "Месячный")}`;
 
-      await tg.sendMessage(chatId, statusMsg, { message_thread_id: threadId || undefined });
+      await tg.sendHtml(chatId, statusMsg, { message_thread_id: threadId || undefined });
       return;
     }
 
@@ -1413,7 +1413,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       const typeNames = { daily: "Дневной", weekly: "Недельный", monthly: "Месячный" };
 
       if (!challenge || challenge.status !== "active") {
-        await tg.sendMessage(chatId, `${typeNames[type]} челлендж\n\nНет активного`, {
+        await tg.sendHtml(chatId, `📋 <b>${typeNames[type]} челлендж</b>\n\n<i>Нет активного</i>`, {
           message_thread_id: threadId || undefined,
         });
         return;
@@ -1423,7 +1423,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       const endDateStr = new Date(challenge.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
       if (submissions.length === 0) {
-        await tg.sendMessage(chatId, `${typeNames[type]} челлендж\n\nТема: ${challenge.topic}\nДо: ${endDateStr}\n\nПока нет работ`, {
+        await tg.sendHtml(chatId, `📋 <b>${typeNames[type]} челлендж</b>\n\n<b>Тема:</b> ${escapeHtml(challenge.topic)}\n<b>До:</b> ${endDateStr}\n\n<i>Пока нет работ</i>`, {
           message_thread_id: threadId || undefined,
         });
         return;
@@ -1435,10 +1435,10 @@ ${formatChallenge(monthly, "Месячный")}`;
         return (a.timestamp || 0) - (b.timestamp || 0);
       });
       const list = sorted.map((s, i) =>
-        `${i + 1}. @${s.username || s.userId} — ${s.score}`
+        `${i + 1}. @${s.username || s.userId} — <b>${s.score}</b>`
       ).join("\n");
 
-      await tg.sendMessage(chatId, `${typeNames[type]} челлендж\n\nТема: ${challenge.topic}\nДо: ${endDateStr}\nУчастников: ${submissions.length}\n\n${list}`, {
+      await tg.sendHtml(chatId, `📋 <b>${typeNames[type]} челлендж</b>\n\n<b>Тема:</b> ${escapeHtml(challenge.topic)}\n<b>До:</b> ${endDateStr}\n<b>Участников:</b> ${submissions.length}\n\n${list}`, {
         message_thread_id: threadId || undefined,
       });
       return;
@@ -1477,9 +1477,9 @@ ${formatChallenge(monthly, "Месячный")}`;
       const total = daily.wins + weekly.wins + monthly.wins;
 
       const winsWord = pluralize(total, "победа", "победы", "побед");
-      await tg.sendMessage(
+      await tg.sendHtml(
         chatId,
-        `Ваша статистика\n\nВсего ${winsWord}: ${total}\n\nДневные: ${daily.wins} (#${daily.rank})\nНедельные: ${weekly.wins} (#${weekly.rank})\nМесячные: ${monthly.wins} (#${monthly.rank})`,
+        `📈 <b>Ваша статистика</b>\n\n<b>Всего ${winsWord}:</b> ${total}\n\n🌅 Дневные: <b>${daily.wins}</b> (#${daily.rank})\n📅 Недельные: <b>${weekly.wins}</b> (#${weekly.rank})\n📆 Месячные: <b>${monthly.wins}</b> (#${monthly.rank})`,
         { message_thread_id: threadId || undefined },
       );
       return;
@@ -1503,9 +1503,9 @@ ${formatChallenge(monthly, "Месячный")}`;
 
       const leaderboard = await storage.getLeaderboard(chatId, type);
       if (leaderboard.length === 0) {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          `Рейтинг ${ru.challengeTypes[type]} пока пуст`,
+          `📭 <i>Рейтинг ${ru.challengeTypes[type]} пока пуст</i>`,
           { message_thread_id: threadId || undefined },
         );
         return;
@@ -1544,14 +1544,14 @@ ${formatChallenge(monthly, "Месячный")}`;
 
       const format = (c, type) => {
         if (!c || c.status !== "active")
-          return `${ru.challengeTypes[type]}: нет`;
+          return `${ru.challengeTypes[type]}: <i>нет</i>`;
         const endDateStr = new Date(c.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short" });
-        return `${ru.challengeTypes[type]} (до ${endDateStr})\n${c.topic}`;
+        return `<b>${ru.challengeTypes[type]}</b> (до ${endDateStr})\n${escapeHtml(c.topic)}`;
       };
 
-      await tg.sendMessage(
+      await tg.sendHtml(
         chatId,
-        `Активные челленджи\n\n${format(daily, "daily")}\n\n${format(weekly, "weekly")}\n\n${format(monthly, "monthly")}`,
+        `🎯 <b>Активные челленджи</b>\n\n${format(daily, "daily")}\n\n${format(weekly, "weekly")}\n\n${format(monthly, "monthly")}`,
         { message_thread_id: threadId || undefined },
       );
       return;
@@ -1575,9 +1575,9 @@ ${formatChallenge(monthly, "Месячный")}`;
       }
 
       if (!type) {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          `Укажите тип челленджа:\n/suggest_daily, /suggest_weekly или /suggest_monthly\n\nИли используйте /suggest в теме нужного челленджа.`,
+          `❓ Укажите тип челленджа:\n<code>/suggest_daily</code>, <code>/suggest_weekly</code> или <code>/suggest_monthly</code>\n\nИли используйте <code>/suggest</code> в теме нужного челленджа.`,
           { message_thread_id: threadId || undefined },
         );
         return;
@@ -1589,9 +1589,9 @@ ${formatChallenge(monthly, "Месячный")}`;
       if (!textAfterCommand) {
         const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
         const minReactionsHelp = await storage.getMinSuggestionReactions(chatId);
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          `💡 Предложите тему для ${typeNames[type]} челленджа\n\nФормат: /suggest Название | Описание\n\nПример:\n/suggest Котики в космосе | Милые котики покоряют галактику в стиле ретро-футуризма\n\nЕсли тема наберёт ${minReactionsHelp}+ реакций до начала голосования, она попадёт в следующий опрос!`,
+          `💡 <b>Предложите тему</b> для ${typeNames[type]} челленджа\n\n<b>Формат:</b> <code>/suggest Название | Описание</code>\n\n<b>Пример:</b>\n<code>/suggest Котики в космосе | Милые котики покоряют галактику в стиле ретро-футуризма</code>\n\nЕсли тема наберёт <b>${minReactionsHelp}+</b> реакций до начала голосования, она попадёт в следующий опрос! 🎯`,
           { message_thread_id: threadId || undefined },
         );
         return;
@@ -1604,18 +1604,18 @@ ${formatChallenge(monthly, "Месячный")}`;
 
       // Валидация названия
       if (!title || title.length < 3) {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          "Название слишком короткое. Минимум 3 символа.",
+          "⚠️ Название слишком короткое. Минимум <b>3</b> символа.",
           { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
         );
         return;
       }
 
       if (title.length > 50) {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          "Название слишком длинное. Максимум 50 символов.",
+          "⚠️ Название слишком длинное. Максимум <b>50</b> символов.",
           { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
         );
         return;
@@ -1624,9 +1624,9 @@ ${formatChallenge(monthly, "Месячный")}`;
       // Проверяем, не предлагал ли уже
       const suggestions = await storage.getSuggestions(chatId, type);
       if (suggestions.some((s) => s.userId === message.from?.id)) {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          "Вы уже предложили тему для этого цикла. Дождитесь следующего голосования.",
+          "⏳ Вы уже предложили тему для этого цикла. Дождитесь следующего голосования.",
           { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
         );
         return;
@@ -1647,18 +1647,18 @@ ${formatChallenge(monthly, "Месячный")}`;
         ? `📝 ${description}`
         : "⚠️ Описание не указано";
 
-      const suggestionMsg = await tg.sendMessage(
+      const suggestionMsg = await tg.sendHtml(
         chatId,
-        `💡 ПРЕДЛОЖЕНИЕ ТЕМЫ (${typeNames[type]})
+        `💡 <b>ПРЕДЛОЖЕНИЕ ТЕМЫ</b> (${typeNames[type]})
 
-🎯 ${title}
+🎯 <b>${escapeHtml(title)}</b>
 
 ${descriptionText}
 
-Автор: ${authorName}
+<i>Автор: ${authorName}</i>
 
 👍 Поставьте реакцию, если хотите эту тему!
-Нужно ${minReactions}+ реакций для включения в опрос.`,
+Нужно <b>${minReactions}+</b> реакций для включения в опрос.`,
         { message_thread_id: threadId || undefined },
       );
 
@@ -1701,9 +1701,9 @@ ${descriptionText}
       }
 
       if (!type) {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          "Укажите тип: /suggestions_daily, /suggestions_weekly, /suggestions_monthly",
+          "❓ Укажите тип: <code>/suggestions_daily</code>, <code>/suggestions_weekly</code>, <code>/suggestions_monthly</code>",
           { message_thread_id: threadId || undefined },
         );
         return;
@@ -1714,9 +1714,9 @@ ${descriptionText}
       const minReactionsList = await storage.getMinSuggestionReactions(chatId);
 
       if (suggestions.length === 0) {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          `Нет предложений для ${typeNames[type]} челленджа.\n\nПредложите тему: /suggest_${type} Название | Описание`,
+          `📭 Нет предложений для ${typeNames[type]} челленджа.\n\n<b>Предложите тему:</b> <code>/suggest_${type} Название | Описание</code>`,
           { message_thread_id: threadId || undefined },
         );
         return;
@@ -1733,9 +1733,9 @@ ${descriptionText}
         msg += `${status} ${s.title} — ${s.reactionCount || 0} реакций\n   ${authorName}\n\n`;
       }
 
-      msg += `Для участия в голосовании нужно ${minReactionsList}+ реакции.`;
+      msg += `Для участия в голосовании нужно <b>${minReactionsList}+</b> реакций.`;
 
-      await tg.sendMessage(chatId, msg, { message_thread_id: threadId || undefined });
+      await tg.sendHtml(chatId, msg, { message_thread_id: threadId || undefined });
       return;
     }
 
@@ -1762,9 +1762,9 @@ ${descriptionText}
 
       const challenge = await storage.getChallenge(chatId, challengeType);
       if (!challenge || challenge.status !== "active") {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          "Сейчас нет активного челленджа в этой теме",
+          "⚠️ <i>Сейчас нет активного челленджа в этой теме</i>",
           {
             message_thread_id: threadId || undefined,
             reply_to_message_id: message.message_id,
@@ -1774,9 +1774,9 @@ ${descriptionText}
       }
 
       if (Date.now() > challenge.endsAt) {
-        await tg.sendMessage(
+        await tg.sendHtml(
           chatId,
-          "Время челленджа истекло",
+          "⏰ <i>Время челленджа истекло</i>",
           {
             message_thread_id: threadId || undefined,
             reply_to_message_id: message.message_id,
@@ -1806,7 +1806,7 @@ ${descriptionText}
 
       if (!result.success) {
         if (result.reason === "limit") {
-          await tg.sendMessage(
+          await tg.sendHtml(
             chatId,
             ru.submissionLimitReached(result.current, result.max),
             {
@@ -1820,7 +1820,7 @@ ${descriptionText}
       }
 
       // Confirmation message
-      await tg.sendMessage(chatId, ru.workAccepted(result.current, result.max), {
+      await tg.sendHtml(chatId, ru.workAccepted(result.current, result.max), {
         message_thread_id: threadId || undefined,
         reply_to_message_id: message.message_id,
       });
@@ -2121,7 +2121,7 @@ async function finishChallenge(env, chatId, config, tg, storage, type) {
     const submissions = await storage.getSubmissions(chatId, type, challenge.id);
 
     if (submissions.length === 0) {
-      await tg.sendMessage(chatId, ru.noSubmissions, {
+      await tg.sendHtml(chatId, ru.noSubmissions, {
         message_thread_id: challenge.topicThreadId || undefined,
       });
     } else {
