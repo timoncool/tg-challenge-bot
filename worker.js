@@ -858,11 +858,7 @@ async function generateThemes(apiKey, type, language = "ru", previousThemes = []
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 1.0,
-            maxOutputTokens: 1000,
-            responseMimeType: "application/json",
-          },
+          generationConfig: { temperature: 1.0, maxOutputTokens: 1000 },
         }),
       },
     );
