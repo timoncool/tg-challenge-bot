@@ -2319,6 +2319,10 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
         voteCount = maxVotes;
 
+        // DEBUG: Log stored options and winner
+        console.log("DEBUG poll.options:", JSON.stringify(poll.options));
+        console.log("DEBUG winnerShort:", winnerShort);
+
         // Unpin the poll
         try {
           await tg.unpinChatMessage(chatId, poll.messageId);
@@ -2331,13 +2335,17 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         // Compare stripped versions (poll options have HTML stripped)
         const matchingFull = poll.options.find((o) => {
           const short = stripHtml(parseTheme(o).short);
+          console.log("DEBUG comparing:", { short, winnerShort, match: short === winnerShort });
           if (short === winnerShort) return true;
           // If winnerShort ends with "...", compare prefix
           if (winnerShort.endsWith("...")) {
-            return short.startsWith(winnerShort.slice(0, -3));
+            const prefix = winnerShort.slice(0, -3);
+            console.log("DEBUG truncated compare:", { short, prefix, startsWith: short.startsWith(prefix) });
+            return short.startsWith(prefix);
           }
           return false;
         });
+        console.log("DEBUG matchingFull:", matchingFull);
         if (matchingFull) {
           const parsed = parseTheme(matchingFull);
           shortTheme = parsed.short;
@@ -2347,6 +2355,7 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
           shortTheme = winnerShort;
           fullTheme = winnerShort;
         }
+        console.log("DEBUG fullTheme:", fullTheme);
       } catch (e) {
         console.error("Poll stop error:", e);
         // Fallback to first option (with safety check)
