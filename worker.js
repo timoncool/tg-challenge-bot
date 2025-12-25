@@ -2319,22 +2319,16 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
 
         // Find matching full theme from stored options
-        // Handle truncated options (100 char limit)
-        // Compare stripped versions (poll options have HTML stripped)
+        // Compare by stripping HTML and checking prefix (handles truncation)
+        const winnerClean = winnerShort.replace(/\.\.\.$/g, "").trim();
         const matchingFull = poll.options.find((o) => {
-          const short = stripHtml(parseTheme(o).short);
-          if (short === winnerShort) return true;
-          // If winnerShort ends with "...", compare prefix
-          if (winnerShort.endsWith("...")) {
-            return short.startsWith(winnerShort.slice(0, -3));
-          }
-          return false;
+          const stored = stripHtml(o);
+          // Exact match or prefix match (for truncated poll options)
+          return stored === winnerShort || stored.startsWith(winnerClean);
         });
         if (matchingFull) {
-          const parsed = parseTheme(matchingFull);
-          shortTheme = parsed.short;
-          // Store the COMPLETE original string (title + description)
-          fullTheme = matchingFull;
+          shortTheme = stripHtml(matchingFull);
+          fullTheme = matchingFull; // Keep original with HTML tags
         } else if (winnerShort) {
           shortTheme = winnerShort;
           fullTheme = winnerShort;
