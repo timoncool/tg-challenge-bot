@@ -2308,13 +2308,13 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
       try {
         const stopped = await tg.stopPoll(chatId, poll.messageId);
         let maxVotes = 0;
-        let winnerShort = "";
+        let winnerIndex = 0;
 
-        // Find winner by short name (that's what's in poll options)
-        for (const opt of stopped.options) {
-          if (opt.voter_count > maxVotes) {
-            maxVotes = opt.voter_count;
-            winnerShort = opt.text;
+        // Find winner INDEX (options order matches poll.options)
+        for (let i = 0; i < stopped.options.length; i++) {
+          if (stopped.options[i].voter_count > maxVotes) {
+            maxVotes = stopped.options[i].voter_count;
+            winnerIndex = i;
           }
         }
         voteCount = maxVotes;
@@ -2326,20 +2326,10 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
           console.error("Failed to unpin poll:", e.message);
         }
 
-        // Find matching full theme from stored options
-        // Compare by stripping HTML and checking prefix (handles truncation)
-        const winnerClean = winnerShort.replace(/\.\.\.$/g, "").trim();
-        const matchingFull = poll.options.find((o) => {
-          const stored = stripHtml(o);
-          // Exact match or prefix match (for truncated poll options)
-          return stored === winnerShort || stored.startsWith(winnerClean);
-        });
-        if (matchingFull) {
-          shortTheme = stripHtml(matchingFull);
-          fullTheme = matchingFull; // Keep original with HTML tags
-        } else if (winnerShort) {
-          shortTheme = winnerShort;
-          fullTheme = winnerShort;
+        // Get full theme by index from stored options (with HTML tags, not truncated)
+        if (poll.options && poll.options[winnerIndex]) {
+          fullTheme = poll.options[winnerIndex];
+          shortTheme = stripHtml(fullTheme);
         }
       } catch (e) {
         console.error("Poll stop error:", e);
