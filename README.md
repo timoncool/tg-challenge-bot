@@ -9,19 +9,6 @@
 [![GitHub stars](https://img.shields.io/github/stars/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/network/members)
 
-**Ключевые слова:** telegram bot, ai art challenge, midjourney, flux, ideogram, dall-e, stable diffusion, neural art, serverless bot, cloudflare workers, творческий челлендж, нейро-арт, конкурс изображений
-
----
-
-## 📁 Файлы
-
-| Файл | Описание |
-|------|----------|
-| `worker.js` | Чистый ванильный код — разверните и настройте под своё сообщество |
-| `worker-mr-challenger.js` | Пример кастомизации с персонажем и стилем |
-
----
-
 ## ✨ Возможности
 
 - 🏘️ **Мульти-сообщества**: один бот обслуживает до 10 групп
@@ -374,6 +361,15 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
 
 ---
 
+## 📁 Файлы
+
+| Файл | Описание |
+|------|----------|
+| `worker.js` | Чистый ванильный код — разверните и настройте под своё сообщество |
+| `worker-mr-challenger.js` | Пример кастомизации с персонажем и стилем |
+
+---
+
 ## 📄 Лицензия
 
 MIT — используйте свободно!
@@ -387,6 +383,10 @@ MIT — используйте свободно!
 
 ---
 
+Проект развивается [Nerual Dreaming](https://t.me/nerual_dreming) — основателем [ArtGeneration.me](https://artgeneration.me/), [техноблогером](https://www.youtube.com/@nerual_dreming) и нейро-евангелистом.
+
+---
+
 ## ⭐ Star History
 
 <a href="https://star-history.com/#timoncool/tg-challenge-bot&Date">
@@ -397,10 +397,3 @@ MIT — используйте свободно!
  </picture>
 </a>
 
----
-
-<div align="center">
-
-Проект развивается [Nerual Dreaming](https://t.me/nerual_dreming) — основателем [ArtGeneration.me](https://artgeneration.me/), [техноблогером](https://www.youtube.com/@nerual_dreming) и нейро-евангелистом.
-
-</div>
