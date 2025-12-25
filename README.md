@@ -1,6 +1,6 @@
 # 🎯 TG Challenge Bot
 
-> Telegram-бот для проведения творческих челленджей в сообществах нейро-арта (GPT Image, FLUX.2, Gemini, Midjourney, Ideogram и др.)
+> Telegram-бот для проведения творческих челленджей в сообществах нейро-арта
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
@@ -9,7 +9,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/network/members)
 
-**Ключевые слова:** telegram bot, ai art challenge, gpt image, flux.2, gemini image, midjourney community, ideogram, neural art, serverless bot, cloudflare workers, творческий челлендж, нейро-арт, конкурс изображений
+**Ключевые слова:** telegram bot, ai art challenge, midjourney, flux, ideogram, dall-e, stable diffusion, neural art, serverless bot, cloudflare workers, творческий челлендж, нейро-арт, конкурс изображений
 
 ---
 
