@@ -9,6 +9,8 @@
 [![GitHub stars](https://img.shields.io/github/stars/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/network/members)
 
+![Preview](assets/preview.png)
+
 ## ✨ Возможности
 
 - 🏘️ **Мульти-сообщества**: один бот обслуживает до 10 групп
