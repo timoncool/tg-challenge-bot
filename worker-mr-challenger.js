@@ -2319,10 +2319,6 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
         voteCount = maxVotes;
 
-        // DEBUG: Log stored options and winner
-        console.log("DEBUG poll.options:", JSON.stringify(poll.options));
-        console.log("DEBUG winnerShort:", winnerShort);
-
         // Unpin the poll
         try {
           await tg.unpinChatMessage(chatId, poll.messageId);
@@ -2331,31 +2327,20 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
 
         // Find matching full theme from stored options
-        // Handle truncated options (100 char limit)
-        // Compare stripped versions (poll options have HTML stripped)
+        // Compare by stripping HTML and checking prefix (handles truncation)
+        const winnerClean = winnerShort.replace(/\.\.\.$/g, "").trim();
         const matchingFull = poll.options.find((o) => {
-          const short = stripHtml(parseTheme(o).short);
-          console.log("DEBUG comparing:", { short, winnerShort, match: short === winnerShort });
-          if (short === winnerShort) return true;
-          // If winnerShort ends with "...", compare prefix
-          if (winnerShort.endsWith("...")) {
-            const prefix = winnerShort.slice(0, -3);
-            console.log("DEBUG truncated compare:", { short, prefix, startsWith: short.startsWith(prefix) });
-            return short.startsWith(prefix);
-          }
-          return false;
+          const stored = stripHtml(o);
+          // Exact match or prefix match (for truncated poll options)
+          return stored === winnerShort || stored.startsWith(winnerClean);
         });
-        console.log("DEBUG matchingFull:", matchingFull);
         if (matchingFull) {
-          const parsed = parseTheme(matchingFull);
-          shortTheme = parsed.short;
-          // Store the COMPLETE original string (title + description)
-          fullTheme = matchingFull;
+          shortTheme = stripHtml(matchingFull);
+          fullTheme = matchingFull; // Keep original with HTML tags
         } else if (winnerShort) {
           shortTheme = winnerShort;
           fullTheme = winnerShort;
         }
-        console.log("DEBUG fullTheme:", fullTheme);
       } catch (e) {
         console.error("Poll stop error:", e);
         // Fallback to first option (with safety check)
