@@ -391,7 +391,5 @@ MIT — используйте свободно!
 
 ## ⭐ Star History
 
-## Star History
-
 [![Star History Chart](https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=date&legend=top-left)](https://www.star-history.com/#timoncool/tg-challenge-bot&type=date&legend=top-left)
 
