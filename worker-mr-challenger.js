@@ -912,7 +912,8 @@ async function generateThemes(apiKey, type, language = "ru", previousThemes = []
 - НЕ КОПИРУЙ примеры — создавай НОВЫЕ темы вдохновляясь стилем
 - Каждая тема — ОБЯЗАТЕЛЬНО 2 предложения: сцена + атмосфера/детали
 - РАЗНООБРАЗИЕ обязательно: не делай 6 похожих тем
-- Эмодзи в начале темы приветствуются
+- Используй эмодзи и HTML теги: <b>жирный</b>, <i>курсив</i>, <code>код</code>
+- Будь КРЕАТИВНЫМ с форматированием!
 
 КАТЕГОРИИ (по одной теме из разных):
 1. Атмосфера и место — уютные локации, городские сцены, природа
@@ -931,7 +932,11 @@ ${modeConfig.examples}
 - Имена персонажей (Гарри Поттер, Наруто и т.д.)
 - Формат "X косплеит Y" или "X как Y"
 - 6 похожих тем одного типа
-- Копировать примеры дословно`;
+- Копировать примеры дословно
+- Зоофилия и секс с животными
+
+ФОРМАТ ОТВЕТА — ТОЛЬКО массив из 6 строк:
+["тема 1", "тема 2", "тема 3", "тема 4", "тема 5", "тема 6"]`;
 
   try {
     console.log("Gemini API request starting...", { type, contentMode, hasApiKey: !!apiKey });
@@ -980,9 +985,9 @@ ${modeConfig.examples}
       throw new Error(`Нужно 6 тем, получено: ${Array.isArray(themes) ? themes.length : typeof themes}`);
     }
 
-    // Handle both string arrays and object arrays
+    // Handle both string arrays and object arrays (extract topic field if object)
     const validThemes = themes.slice(0, 6).map(t =>
-      typeof t === "string" ? t.trim() : (t.theme || t.text || t.content || JSON.stringify(t))
+      typeof t === "string" ? t.trim() : (t.topic || t.theme || t.text || t.content || String(t))
     );
     console.log("Gemini parsed themes:", validThemes);
     return validThemes;
