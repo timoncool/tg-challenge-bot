@@ -401,9 +401,7 @@ MIT — используйте свободно!
 
 <div align="center">
 
-### 🚀 Создано [Nerual Dreaming](https://t.me/nerual_dreming)
-
-Основатель [ArtGeneration.me](https://artgeneration.me/) • [YouTube](https://www.youtube.com/@nerual_dreming) • Нейро-евангелист
+Проект развивается [Nerual Dreaming](https://t.me/nerual_dreming) — основателем [ArtGeneration.me](https://artgeneration.me/), [техноблогером](https://www.youtube.com/@nerual_dreming) и нейро-евангелистом.
 
 <a href="https://t.me/nerual_dreming"><img src="https://img.shields.io/badge/Telegram-Nerual_Dreaming-26A5E4?logo=telegram&logoColor=white&style=for-the-badge" alt="Telegram" /></a>
 <a href="https://artgeneration.me/"><img src="https://img.shields.io/badge/Web-ArtGeneration.me-FF6B6B?style=for-the-badge" alt="ArtGeneration" /></a>
