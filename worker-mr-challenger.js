@@ -879,7 +879,11 @@ async function generateThemes(apiKey, type, language = "ru", previousThemes = []
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 1.0, maxOutputTokens: 1000 },
+          generationConfig: {
+            temperature: 1.0,
+            maxOutputTokens: 1000,
+            responseMimeType: "application/json",
+          },
         }),
       },
     );
@@ -902,19 +906,17 @@ async function generateThemes(apiKey, type, language = "ru", previousThemes = []
       throw new Error(`API пустой ответ: ${reason}`);
     }
 
-    // Parse JSON array
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      throw new Error(`Не найден JSON массив. Ответ: ${text.substring(0, 200)}`);
-    }
-
-    const themes = JSON.parse(jsonMatch[0]);
+    // With responseMimeType: "application/json", text is already clean JSON
+    const themes = JSON.parse(text);
 
     if (!Array.isArray(themes) || themes.length < 6) {
-      throw new Error(`Нужно 6 тем, получено: ${themes.length}`);
+      throw new Error(`Нужно 6 тем, получено: ${Array.isArray(themes) ? themes.length : typeof themes}`);
     }
 
-    const validThemes = themes.slice(0, 6).map(t => String(t).trim());
+    // Handle both string arrays and object arrays
+    const validThemes = themes.slice(0, 6).map(t =>
+      typeof t === "string" ? t.trim() : (t.theme || t.text || t.content || JSON.stringify(t))
+    );
     console.log("Gemini parsed themes:", validThemes);
     return validThemes;
 
