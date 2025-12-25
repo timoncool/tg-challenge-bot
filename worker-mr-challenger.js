@@ -1623,31 +1623,20 @@ ${formatChallenge(monthly, "Месячный")}`;
         const minReactionsHelp = await storage.getMinSuggestionReactions(chatId);
         await tg.sendHtml(
           chatId,
-          `💡 <b>Предложите тему</b> для ${typeNames[type]} челленджа\n\n<b>Формат:</b> <code>/suggest Название | Описание</code>\n\n<b>Пример:</b>\n<code>/suggest Котики в космосе | Милые котики покоряют галактику в стиле ретро-футуризма</code>\n\nЕсли тема наберёт <b>${minReactionsHelp}+</b> реакций до начала голосования, она попадёт в следующий опрос! 🎯`,
+          `💡 <b>Предложите тему</b> для ${typeNames[type]} челленджа\n\n<b>Пример:</b>\n<code>/suggest Ребёнок Чебурашки и Крокодила Гены на прогулке</code>\n\nЕсли тема наберёт <b>${minReactionsHelp}+</b> реакций, она попадёт в опрос! 🎯`,
           { message_thread_id: threadId || undefined },
         );
         return;
       }
 
-      // Парсинг: Название | Описание
-      const parts = textAfterCommand.split("|").map((p) => p.trim());
-      const title = parts[0];
-      const description = parts[1] || parts[0];
+      // Просто текст темы, без разделения
+      const themeText = textAfterCommand;
 
-      // Валидация названия
-      if (!title || title.length < 3) {
+      // Минимальная валидация
+      if (themeText.length < 5) {
         await tg.sendHtml(
           chatId,
-          "⚠️ Название слишком короткое. Минимум <b>3</b> символа.",
-          { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
-        );
-        return;
-      }
-
-      if (title.length > 50) {
-        await tg.sendHtml(
-          chatId,
-          "⚠️ Название слишком длинное. Максимум <b>50</b> символов.",
+          "⚠️ Слишком короткое предложение.",
           { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
         );
         return;
@@ -1674,23 +1663,16 @@ ${formatChallenge(monthly, "Месячный")}`;
       const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
       const authorName = message.from?.username ? `@${message.from.username}` : message.from?.first_name || "Аноним";
 
-      // Формируем понятное описание
-      const descriptionText = description !== title
-        ? `📝 ${description}`
-        : "⚠️ Описание не указано";
-
       const suggestionMsg = await tg.sendHtml(
         chatId,
         `💡 <b>ПРЕДЛОЖЕНИЕ ТЕМЫ</b> (${typeNames[type]})
 
-🎯 <b>${escapeHtml(title)}</b>
-
-${descriptionText}
+${themeText}
 
 <i>Автор: ${authorName}</i>
 
-👍 Поставьте реакцию, если хотите эту тему!
-Нужно <b>${minReactions}+</b> реакций для включения в опрос.`,
+👍 Реакция = голос за тему!
+Нужно <b>${minReactions}+</b> для включения в опрос.`,
         { message_thread_id: threadId || undefined },
       );
 
@@ -1700,8 +1682,7 @@ ${descriptionText}
         messageId: suggestionMsg.message_id,
         userId: message.from?.id,
         username: message.from?.username || message.from?.first_name,
-        title: title,
-        description: description,
+        theme: themeText,
         createdAt: Date.now(),
         threadId: threadId,
         reactions: {},
@@ -1717,7 +1698,7 @@ ${descriptionText}
         console.log("Could not delete suggest command:", e.message);
       }
 
-      console.log(`Suggestion created: community=${chatId}, type=${type}, id=${suggestionId}, title="${title}"`);
+      console.log(`Suggestion created: community=${chatId}, type=${type}, id=${suggestionId}`);
       return;
     }
 
@@ -1762,7 +1743,8 @@ ${descriptionText}
       for (const s of sorted) {
         const status = (s.reactionCount || 0) >= minReactionsList ? "✅" : "⏳";
         const authorName = s.username ? `@${s.username}` : "Аноним";
-        msg += `${status} ${s.title} — ${s.reactionCount || 0} реакций\n   ${authorName}\n\n`;
+        const themePreview = (s.theme || s.title || "").substring(0, 50) + ((s.theme || s.title || "").length > 50 ? "..." : "");
+        msg += `${status} ${themePreview} — ${s.reactionCount || 0} реакций\n   ${authorName}\n\n`;
       }
 
       msg += `Для участия в голосовании нужно <b>${minReactionsList}+</b> реакций.`;
@@ -2063,8 +2045,8 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     const minReactionsPoll = await storage.getMinSuggestionReactions(chatId);
     const approvedSuggestions = await storage.getApprovedSuggestions(chatId, type, minReactionsPoll);
 
-    // Формируем из предложений строки в формате "Название | Описание"
-    const suggestionThemes = approvedSuggestions.map((s) => `${s.title} | ${s.description}`);
+    // Берём темы из предложений
+    const suggestionThemes = approvedSuggestions.map((s) => s.theme || s.title || s.description);
 
     // Генерируем AI-темы (меньше, если есть предложения от пользователей)
     const aiThemeCount = Math.max(2, 6 - suggestionThemes.length);
