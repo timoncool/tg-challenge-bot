@@ -1444,19 +1444,19 @@ ${formatChallenge(monthly, "Месячный")}`;
 
     // Admin: Test Gemini API - тестирует боевой промпт для 6 тем
     if (command === "/test_ai" && isAdmin) {
-      await tg.sendMessage(chatId, "Тестирую Gemini API с боевым промптом...", { message_thread_id: threadId || undefined });
+      await tg.sendHtml(chatId, "🔄 <i>Тестирую Gemini API...</i>", { message_thread_id: threadId || undefined });
       try {
         const contentMode = await storage.getContentMode(chatId);
         const themes = await generateThemes(env.GEMINI_API_KEY, "daily", "ru", [], contentMode);
 
-        let msg = `✅ Gemini API (режим: ${contentMode})\n\n`;
+        let msg = `✅ <b>Gemini API</b> (режим: <i>${contentMode}</i>)\n\n`;
         themes.forEach((theme, i) => {
           msg += `${i + 1}. ${theme}\n\n`;
         });
 
-        await tg.sendMessage(chatId, msg.substring(0, 4000), { message_thread_id: threadId || undefined });
+        await tg.sendHtml(chatId, msg.substring(0, 4000), { message_thread_id: threadId || undefined });
       } catch (e) {
-        await tg.sendMessage(chatId, `❌ Ошибка: ${e.message}`, { message_thread_id: threadId || undefined });
+        await tg.sendHtml(chatId, `❌ <b>Ошибка:</b> ${escapeHtml(e.message)}`, { message_thread_id: threadId || undefined });
       }
       return;
     }
