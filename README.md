@@ -391,11 +391,7 @@ MIT — используйте свободно!
 
 ## ⭐ Star History
 
-<a href="https://star-history.com/#timoncool/tg-challenge-bot&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=Date&theme=dark&v=1" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=Date&v=1" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=Date&v=1" />
- </picture>
-</a>
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=date&legend=top-left)](https://www.star-history.com/#timoncool/tg-challenge-bot&type=date&legend=top-left)
 
