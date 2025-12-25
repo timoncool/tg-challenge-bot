@@ -383,6 +383,10 @@ MIT — используйте свободно!
 
 ---
 
+Проект развивается [Nerual Dreaming](https://t.me/nerual_dreming) — основателем [ArtGeneration.me](https://artgeneration.me/), [техноблогером](https://www.youtube.com/@nerual_dreming) и нейро-евангелистом.
+
+---
+
 ## ⭐ Star History
 
 <a href="https://star-history.com/#timoncool/tg-challenge-bot&Date">
@@ -393,10 +397,3 @@ MIT — используйте свободно!
  </picture>
 </a>
 
----
-
-<div align="center">
-
-Проект развивается [Nerual Dreaming](https://t.me/nerual_dreming) — основателем [ArtGeneration.me](https://artgeneration.me/), [техноблогером](https://www.youtube.com/@nerual_dreming) и нейро-евангелистом.
-
-</div>
