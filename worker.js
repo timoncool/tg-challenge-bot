@@ -859,10 +859,6 @@ class Storage {
   // Добавить новое предложение - with TTL for automatic cleanup
   async addSuggestion(chatId, type, suggestion) {
     const suggestions = await this.getSuggestions(chatId, type);
-    // Один пользователь - одно предложение на текущий цикл
-    if (suggestions.some((s) => s.userId === suggestion.userId)) {
-      return { success: false, error: "already_suggested" };
-    }
     suggestions.push(suggestion);
     await this.set(this._key(chatId, "suggestions", type), suggestions, { expirationTtl: TTL.SUGGESTIONS });
     return { success: true };
@@ -1919,17 +1915,6 @@ ${formatChallenge(monthly, "👑 Месячный")}`;
         await tg.sendHtml(
           chatId,
           "⚠️ Слишком короткое предложение.",
-          { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
-        );
-        return;
-      }
-
-      // Проверяем, не предлагал ли уже
-      const suggestions = await storage.getSuggestions(chatId, type);
-      if (suggestions.some((s) => s.userId === message.from?.id)) {
-        await tg.sendHtml(
-          chatId,
-          "⏳ Вы уже предложили тему для этого цикла. Дождитесь следующего голосования.",
           { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
         );
         return;
