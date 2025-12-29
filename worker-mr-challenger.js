@@ -1656,7 +1656,8 @@ ${modesList}
 /schedule_daily · /schedule_weekly · /schedule_monthly
 
 <b>Предложения тем:</b>
-/suggest · /suggestions · /clear_suggestions
+/suggest · /suggestions
+/clear_suggestions — очистить
 Мин. реакций: ${minSuggestionReactions} (/set_suggestion_reactions)
 
 <b>Сообщества</b>
