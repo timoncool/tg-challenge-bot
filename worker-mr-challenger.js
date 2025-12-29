@@ -1956,9 +1956,9 @@ ${formatChallenge(monthly, "Месячный")}`;
         chatId,
         `💡 <b>ПРЕДЛОЖЕНИЕ ТЕМЫ</b> (${typeNames[type]})
 
-${themeText}
+${escapeHtml(themeText)}
 
-<i>Автор: ${authorName}</i>
+<i>Автор: ${escapeHtml(authorName)}</i>
 
 👍 Реакция = голос за тему!
 Нужно <b>${minReactions}+</b> для включения в опрос.`,
@@ -2033,7 +2033,7 @@ ${themeText}
         const status = (s.reactionCount || 0) >= minReactionsList ? "✅" : "⏳";
         const authorName = s.username ? `@${s.username}` : "Аноним";
         const themePreview = (s.theme || s.title || "").substring(0, 50) + ((s.theme || s.title || "").length > 50 ? "..." : "");
-        msg += `${status} ${themePreview} — ${s.reactionCount || 0} реакций\n   ${authorName}\n\n`;
+        msg += `${status} ${escapeHtml(themePreview)} — ${s.reactionCount || 0} реакций\n   ${escapeHtml(authorName)}\n\n`;
       }
 
       msg += `Для участия в голосовании нужно <b>${minReactionsList}+</b> реакций.`;
