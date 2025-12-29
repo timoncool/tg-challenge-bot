@@ -880,10 +880,6 @@ class Storage {
   // Добавить новое предложение - with TTL for automatic cleanup
   async addSuggestion(chatId, type, suggestion) {
     const suggestions = await this.getSuggestions(chatId, type);
-    // Один пользователь - одно предложение на текущий цикл
-    if (suggestions.some((s) => s.userId === suggestion.userId)) {
-      return { success: false, error: "already_suggested" };
-    }
     suggestions.push(suggestion);
     await this.set(this._key(chatId, "suggestions", type), suggestions, { expirationTtl: TTL.SUGGESTIONS });
     return { success: true };
@@ -1492,6 +1488,47 @@ ${modesList}
       return;
     }
 
+    // Очистка предложений тем
+    const clearSuggestionsMatch = command.match(/^\/clear_suggestions(?:_(daily|weekly|monthly))?$/);
+    if (clearSuggestionsMatch && isAdmin) {
+      let type = clearSuggestionsMatch[1]; // daily|weekly|monthly или undefined для всех
+
+      // Если тип не указан, пробуем определить по топику
+      if (!type && threadId && config) {
+        const topics = config.topics || {};
+        if (topics.daily === threadId) type = "daily";
+        else if (topics.weekly === threadId) type = "weekly";
+        else if (topics.monthly === threadId) type = "monthly";
+      }
+
+      const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
+
+      if (type) {
+        // Очищаем конкретный тип
+        const suggestions = await storage.getSuggestions(chatId, type);
+        await storage.clearSuggestions(chatId, type);
+        await tg.sendHtml(
+          chatId,
+          `🗑 Очищено <b>${suggestions.length}</b> предложений для ${typeNames[type]} челленджа.`,
+          { message_thread_id: threadId || undefined }
+        );
+      } else {
+        // Очищаем все типы
+        let total = 0;
+        for (const t of ["daily", "weekly", "monthly"]) {
+          const suggestions = await storage.getSuggestions(chatId, t);
+          total += suggestions.length;
+          await storage.clearSuggestions(chatId, t);
+        }
+        await tg.sendHtml(
+          chatId,
+          `🗑 Очищено <b>${total}</b> предложений для всех типов.`,
+          { message_thread_id: threadId || undefined }
+        );
+      }
+      return;
+    }
+
     // Schedule configuration: /schedule_daily 17, /schedule_weekly 0 17 (day hour), /schedule_monthly 1 17 (per-community)
     const scheduleMatch = command.match(/^\/schedule_(daily|weekly|monthly)$/);
     if (scheduleMatch && isAdmin) {
@@ -1922,7 +1959,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       // Просто текст темы, без разделения
       const themeText = textAfterCommand;
 
-      // Минимальная валидация
+      // Валидация длины
       if (themeText.length < 5) {
         await tg.sendHtml(
           chatId,
@@ -1932,12 +1969,27 @@ ${formatChallenge(monthly, "Месячный")}`;
         return;
       }
 
-      // Проверяем, не предлагал ли уже
-      const suggestions = await storage.getSuggestions(chatId, type);
-      if (suggestions.some((s) => s.userId === message.from?.id)) {
+      if (themeText.length > 500) {
         await tg.sendHtml(
           chatId,
-          "⏳ Вы уже предложили тему для этого цикла. Дождитесь следующего голосования.",
+          "⚠️ Слишком длинное предложение (макс. 500 символов).",
+          { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
+        );
+        return;
+      }
+
+      // Rate limiting: не чаще 1 предложения в минуту от одного пользователя
+      const allSuggestions = await storage.getSuggestions(chatId, type);
+      const userId = message.from?.id;
+      const userLastSuggestion = allSuggestions
+        .filter((s) => s.userId === userId)
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+
+      if (userLastSuggestion && Date.now() - (userLastSuggestion.createdAt || 0) < 60000) {
+        const waitSec = Math.ceil((60000 - (Date.now() - userLastSuggestion.createdAt)) / 1000);
+        await tg.sendHtml(
+          chatId,
+          `⏳ Подождите ${waitSec} сек. перед следующим предложением.`,
           { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
         );
         return;
@@ -2394,10 +2446,9 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
       console.error("Failed to pin poll:", e.message);
     }
 
-    // Очищаем использованные предложения
-    if (approvedSuggestions.length > 0) {
-      await storage.clearSuggestions(chatId, type);
-    }
+    // Очищаем ВСЕ предложения после создания опроса
+    // (не только одобренные, чтобы пользователи могли предложить новые темы в следующем цикле)
+    await storage.clearSuggestions(chatId, type);
 
     console.log(`Poll created: community=${chatId}, type=${type}, userSuggestions=${suggestionThemes.length}, aiThemes=${aiThemes.length}`);
   } catch (e) {
