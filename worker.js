@@ -2386,10 +2386,9 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
       console.error("Failed to pin poll:", e.message);
     }
 
-    // Очищаем использованные предложения
-    if (approvedSuggestions.length > 0) {
-      await storage.clearSuggestions(chatId, type);
-    }
+    // Очищаем ВСЕ предложения после создания опроса
+    // (не только одобренные, чтобы пользователи могли предложить новые темы в следующем цикле)
+    await storage.clearSuggestions(chatId, type);
 
     console.log(`Poll created: community=${chatId}, type=${type}, userSuggestions=${suggestionThemes.length}, aiThemes=${aiThemes.length}`);
   } catch (e) {
