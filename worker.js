@@ -1859,7 +1859,8 @@ ${formatChallenge(monthly, "👑 Месячный")}`;
         if (!c || c.status !== "active")
           return `${ru.challengeTypes[type]}: нет`;
         const endDateStr = new Date(c.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short" });
-        return `${ru.challengeTypes[type]} (до ${endDateStr})\n${c.topic}`;
+        // Use topicFull for HTML formatting, fallback to topic
+        return `${ru.challengeTypes[type]} (до ${endDateStr})\n${c.topicFull || c.topic}`;
       };
 
       await tg.sendHtml(
