@@ -1950,11 +1950,37 @@ ${formatChallenge(monthly, "👑 Месячный")}`;
       // Просто текст темы, без разделения
       const themeText = textAfterCommand;
 
-      // Минимальная валидация
+      // Валидация длины
       if (themeText.length < 5) {
         await tg.sendHtml(
           chatId,
           "⚠️ Слишком короткое предложение.",
+          { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
+        );
+        return;
+      }
+
+      if (themeText.length > 500) {
+        await tg.sendHtml(
+          chatId,
+          "⚠️ Слишком длинное предложение (макс. 500 символов).",
+          { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
+        );
+        return;
+      }
+
+      // Rate limiting: не чаще 1 предложения в минуту от одного пользователя
+      const allSuggestions = await storage.getSuggestions(chatId, type);
+      const userId = message.from?.id;
+      const userLastSuggestion = allSuggestions
+        .filter((s) => s.userId === userId)
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+
+      if (userLastSuggestion && Date.now() - (userLastSuggestion.createdAt || 0) < 60000) {
+        const waitSec = Math.ceil((60000 - (Date.now() - userLastSuggestion.createdAt)) / 1000);
+        await tg.sendHtml(
+          chatId,
+          `⏳ Подождите ${waitSec} сек. перед следующим предложением.`,
           { message_thread_id: threadId || undefined, reply_to_message_id: message.message_id },
         );
         return;
