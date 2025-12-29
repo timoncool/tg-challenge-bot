@@ -2231,9 +2231,24 @@ async function finishChallenge(env, chatId, config, tg, storage, type) {
         message_thread_id: challenge.topicThreadId || undefined,
       });
     } else {
+      // Filter to keep only the best submission per user
+      // If a user has multiple submissions with same score, keep the earlier one
+      const bestSubmissionPerUser = {};
+      for (const s of submissions) {
+        const best = bestSubmissionPerUser[s.userId];
+        if (
+          !best ||
+          s.score > best.score ||
+          (s.score === best.score && (s.timestamp || 0) < (best.timestamp || 0))
+        ) {
+          bestSubmissionPerUser[s.userId] = s;
+        }
+      }
+      const uniqueSubmissions = Object.values(bestSubmissionPerUser);
+
       // Find max score and all winners with that score
-      const maxScore = Math.max(...submissions.map((s) => s.score));
-      const winners = submissions.filter((s) => s.score === maxScore);
+      const maxScore = Math.max(...uniqueSubmissions.map((s) => s.score));
+      const winners = uniqueSubmissions.filter((s) => s.score === maxScore);
 
       // Format winner names
       const winnerNames = winners
