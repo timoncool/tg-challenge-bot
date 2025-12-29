@@ -2588,7 +2588,7 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
       topic: shortTheme,
       topicFull: fullTheme,
       status: "active",
-      startedAt: Date.now(),
+      startedAt,
       endsAt,
       topicThreadId: topicId,
       announcementMessageId: announcement.message_id,

@@ -1739,7 +1739,7 @@ ${formatChallenge(monthly, "Месячный")}`;
         return (a.timestamp || 0) - (b.timestamp || 0);
       });
       const list = sorted.map((s, i) =>
-        `${i + 1}. @${s.username || s.userId} — <b>${s.score}</b>`
+        `${i + 1}. @${escapeHtml(s.username || String(s.userId))} — <b>${s.score}</b>`
       ).join("\n");
 
       await tg.sendHtml(chatId, `📋 <b>${typeNames[type]} челлендж</b>\n\n<b>Тема:</b> ${escapeHtml(challenge.topic)}\n<b>До:</b> ${endDateStr}\n<b>Участников:</b> ${submissions.length}\n\n${list}`, {
@@ -2596,7 +2596,7 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
       topic: shortTheme,
       topicFull: fullTheme,
       status: "active",
-      startedAt: Date.now(),
+      startedAt,
       endsAt,
       topicThreadId: topicId,
       announcementMessageId: announcement.message_id,
