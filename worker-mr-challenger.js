@@ -2524,9 +2524,10 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
 
         // Find matching full theme from stored options
-        // Handle truncated options (100 char limit)
+        // Handle truncated options (100 char limit) and HTML stripping
         const matchingFull = poll.options.find((o) => {
-          const short = parseTheme(o).short;
+          // Strip HTML because poll options are displayed without HTML tags
+          const short = stripHtml(parseTheme(o).short);
           if (short === winnerShort) return true;
           // If winnerShort ends with "...", compare prefix
           if (winnerShort.endsWith("...")) {
