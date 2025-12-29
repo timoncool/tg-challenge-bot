@@ -1479,6 +1479,46 @@ ${modesList}
       return;
     }
 
+    // Очистка предложений тем
+    const clearSuggestionsMatch = command.match(/^\/clear_suggestions(?:_(daily|weekly|monthly))?$/);
+    if (clearSuggestionsMatch && isAdmin) {
+      let type = clearSuggestionsMatch[1]; // daily|weekly|monthly или undefined для всех
+
+      // Если тип не указан, пробуем определить по топику
+      if (!type && threadId && config) {
+        if (config.topics.daily === threadId) type = "daily";
+        else if (config.topics.weekly === threadId) type = "weekly";
+        else if (config.topics.monthly === threadId) type = "monthly";
+      }
+
+      const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
+
+      if (type) {
+        // Очищаем конкретный тип
+        const suggestions = await storage.getSuggestions(chatId, type);
+        await storage.clearSuggestions(chatId, type);
+        await tg.sendHtml(
+          chatId,
+          `🗑 Очищено <b>${suggestions.length}</b> предложений для ${typeNames[type]} челленджа.`,
+          { message_thread_id: threadId || undefined }
+        );
+      } else {
+        // Очищаем все типы
+        let total = 0;
+        for (const t of ["daily", "weekly", "monthly"]) {
+          const suggestions = await storage.getSuggestions(chatId, t);
+          total += suggestions.length;
+          await storage.clearSuggestions(chatId, t);
+        }
+        await tg.sendHtml(
+          chatId,
+          `🗑 Очищено <b>${total}</b> предложений для всех типов челленджей.`,
+          { message_thread_id: threadId || undefined }
+        );
+      }
+      return;
+    }
+
     // Schedule configuration: /schedule_daily 17, /schedule_weekly 0 17 (day hour), /schedule_monthly 1 17 (per-community)
     const scheduleMatch = command.match(/^\/schedule_(daily|weekly|monthly)$/);
     if (scheduleMatch && isAdmin) {
@@ -1606,7 +1646,7 @@ ${modesList}
 /schedule_daily · /schedule_weekly · /schedule_monthly
 
 <b>Предложения тем:</b>
-/suggest · /suggestions
+/suggest · /suggestions · /clear_suggestions
 Мин. реакций: ${minSuggestionReactions} (/set_suggestion_reactions)
 
 <b>Сообщества</b>
