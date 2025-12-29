@@ -247,7 +247,7 @@ async function addCommunity(storage, chatId, name = null) {
   return { success: true, count: count + 1 };
 }
 
-// Удалить сообщество
+// Удалить сообщество (with cascading delete of all community data)
 async function removeCommunity(storage, chatId) {
   const communities = await getCommunities(storage);
 
@@ -255,9 +255,26 @@ async function removeCommunity(storage, chatId) {
     return { success: false, error: "Сообщество не найдено" };
   }
 
+  // First, delete all community-related data from KV
+  const cascadeResult = await storage.deleteAllCommunityData(chatId);
+  console.log(`Community ${chatId} cascade delete result:`, cascadeResult);
+
+  // Check if cascade delete succeeded before removing from list
+  if (!cascadeResult.success) {
+    console.error(`Community ${chatId} cascade delete failed, not removing from list`);
+    return {
+      success: false,
+      error: "Не удалось удалить все данные сообщества",
+      deletedKeys: cascadeResult.deleted || 0,
+      failedKeys: cascadeResult.failed || 0,
+    };
+  }
+
+  // Then remove from communities list
   delete communities[String(chatId)];
   await storage.set("communities:list", communities);
-  return { success: true };
+
+  return { success: true, deletedKeys: cascadeResult.deleted || 0 };
 }
 
 // Получить конфиг для конкретного сообщества
@@ -581,22 +598,93 @@ class TelegramAPI {
 // KV STORAGE
 // ============================================
 
+// TTL Constants (in seconds)
+const TTL = {
+  SUBMISSIONS: 60 * 24 * 3600,      // 60 days - for annual stats calculation
+  REACTIONS: 60 * 24 * 3600,        // 60 days
+  CHALLENGES: 90 * 24 * 3600,       // 90 days - keep finished challenges for history
+  SUGGESTIONS: 7 * 24 * 3600,       // 7 days
+  ACTIVE_TOPICS: 31 * 24 * 3600,    // 31 days fallback
+  POLLS: 7 * 24 * 3600,             // 7 days - polls are temporary, deleted after use
+  WEBHOOK_DEDUP: 3600,              // 1 hour
+};
+
 class Storage {
   constructor(kv) {
     this.kv = kv;
   }
 
-  async get(key) {
-    const data = await this.kv.get(key, "json");
-    return data;
+  // Get with error handling
+  async get(key, options = {}) {
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const data = await this.kv.get(key, "json");
+        return data;
+      } catch (error) {
+        console.error(`KV get error (attempt ${attempt + 1}/${maxRetries}):`, { key, error: error.message });
+        if (attempt === maxRetries - 1) throw error;
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 100));
+      }
+    }
   }
 
-  async set(key, value) {
-    await this.kv.put(key, JSON.stringify(value));
+  // Set with optional TTL and error handling
+  async set(key, value, options = {}) {
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const kvOptions = {};
+        if (options.expirationTtl) {
+          kvOptions.expirationTtl = options.expirationTtl;
+        }
+        await this.kv.put(key, JSON.stringify(value), kvOptions);
+        return;
+      } catch (error) {
+        console.error(`KV set error (attempt ${attempt + 1}/${maxRetries}):`, { key, error: error.message });
+        const isRateLimit = error.message?.includes('429') || error.status === 429;
+        if (attempt === maxRetries - 1) {
+          throw error; // Always throw on last attempt
+        }
+        // Wait longer for rate limits
+        const delay = isRateLimit ? Math.pow(2, attempt) * 500 : Math.pow(2, attempt) * 100;
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
   }
 
   async delete(key) {
-    await this.kv.delete(key);
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        await this.kv.delete(key);
+        return;
+      } catch (error) {
+        console.error(`KV delete error (attempt ${attempt + 1}/${maxRetries}):`, { key, error: error.message });
+        if (attempt === maxRetries - 1) throw error;
+        // Wait longer for rate limits
+        const isRateLimit = error.message?.includes('429') || error.status === 429;
+        const delay = isRateLimit ? Math.pow(2, attempt) * 500 : Math.pow(2, attempt) * 100;
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+
+  // List keys with prefix (for cascading delete) - with retries
+  async list(options = {}) {
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        return await this.kv.list(options);
+      } catch (error) {
+        console.error(`KV list error (attempt ${attempt + 1}/${maxRetries}):`, { options, error: error.message });
+        if (attempt === maxRetries - 1) {
+          // Return empty but mark as incomplete so caller knows it failed
+          return { keys: [], list_complete: false, error: error.message };
+        }
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 100));
+      }
+    }
   }
 
   // Helper to build community-prefixed key
@@ -604,13 +692,15 @@ class Storage {
     return `community:${chatId}:${parts.join(":")}`;
   }
 
-  // Challenge (per-community)
+  // Challenge (per-community) - with TTL for finished challenges
   async getChallenge(chatId, type) {
     return this.get(this._key(chatId, "challenge", type));
   }
 
   async saveChallenge(chatId, challenge) {
-    await this.set(this._key(chatId, "challenge", challenge.type), challenge);
+    // Apply TTL only when challenge is finished, active challenges stay indefinitely
+    const options = challenge.status === 'finished' ? { expirationTtl: TTL.CHALLENGES } : {};
+    await this.set(this._key(chatId, "challenge", challenge.type), challenge, options);
   }
 
   async getNextChallengeId(chatId, type) {
@@ -628,14 +718,15 @@ class Storage {
   }
 
   async savePoll(chatId, poll) {
-    await this.set(this._key(chatId, "poll", poll.type), poll);
+    // Polls have TTL as fallback cleanup (they're explicitly deleted when used)
+    await this.set(this._key(chatId, "poll", poll.type), poll, { expirationTtl: TTL.POLLS });
   }
 
   async deletePoll(chatId, type) {
     await this.delete(this._key(chatId, "poll", type));
   }
 
-  // Submissions (per-community)
+  // Submissions (per-community) - with TTL for automatic cleanup
   async getSubmissions(chatId, type, challengeId) {
     return (await this.get(this._key(chatId, "submissions", type, challengeId))) || [];
   }
@@ -653,7 +744,14 @@ class Storage {
       return { success: false, reason: "limit", current: userSubmissions.length, max: limit };
     }
     submissions.push(submission);
-    await this.set(this._key(chatId, "submissions", type, challengeId), submissions);
+    // Save with TTL for automatic cleanup
+    await this.set(this._key(chatId, "submissions", type, challengeId), submissions, { expirationTtl: TTL.SUBMISSIONS });
+
+    // Track participation in leaderboard (first submission per challenge counts as 1 participation)
+    if (userSubmissions.length === 0) {
+      await this.addParticipation(chatId, type, submission.userId, submission.username);
+    }
+
     return { success: true, current: userSubmissions.length + 1, max: limit };
   }
 
@@ -662,21 +760,51 @@ class Storage {
     const submission = submissions.find((s) => s.messageId === messageId);
     if (submission) {
       submission.score = score;
-      await this.set(this._key(chatId, "submissions", type, challengeId), submissions);
+      await this.set(this._key(chatId, "submissions", type, challengeId), submissions, { expirationTtl: TTL.SUBMISSIONS });
     }
   }
 
-  // Leaderboard (per-community)
+  // Leaderboard (per-community) - stores wins AND participations for annual stats
   async getLeaderboard(chatId, type) {
     const map = (await this.get(this._key(chatId, "leaderboard", type))) || {};
-    return Object.values(map).sort((a, b) => b.wins - a.wins);
+    // Sort by wins descending, then by participations descending
+    return Object.values(map).sort((a, b) => {
+      if (b.wins !== a.wins) return b.wins - a.wins;
+      return (b.participations || 0) - (a.participations || 0);
+    });
+  }
+
+  // Add participation (called on first submission to a challenge)
+  async addParticipation(chatId, type, userId, username) {
+    const map = (await this.get(this._key(chatId, "leaderboard", type))) || {};
+    const key = String(userId);
+    if (!map[key]) {
+      // Backward compatible: initialize with wins=0, participations=0
+      map[key] = { userId, username, wins: 0, participations: 0 };
+    }
+    // Ensure participations field exists (backward compatibility)
+    if (typeof map[key].participations !== 'number') {
+      map[key].participations = 0;
+    }
+    map[key].participations += 1;
+    map[key].lastParticipation = Date.now();
+    if (username) map[key].username = username;
+    // Leaderboard is permanent - no TTL
+    await this.set(this._key(chatId, "leaderboard", type), map);
   }
 
   async addWin(chatId, type, userId, username) {
     const map = (await this.get(this._key(chatId, "leaderboard", type))) || {};
     const key = String(userId);
     if (!map[key]) {
-      map[key] = { userId, username, wins: 0 };
+      map[key] = { userId, username, wins: 0, participations: 0 };
+    }
+    // Ensure fields exist with correct types (backward compatibility)
+    if (typeof map[key].wins !== 'number') {
+      map[key].wins = 0;
+    }
+    if (typeof map[key].participations !== 'number') {
+      map[key].participations = 0;
     }
     map[key].wins += 1;
     map[key].lastWin = Date.now();
@@ -687,17 +815,22 @@ class Storage {
   async getUserStats(chatId, type, userId) {
     const leaderboard = await this.getLeaderboard(chatId, type);
     const index = leaderboard.findIndex((e) => e.userId === userId);
-    if (index === -1) return { wins: 0, rank: leaderboard.length + 1 };
-    return { wins: leaderboard[index].wins, rank: index + 1 };
+    if (index === -1) return { wins: 0, participations: 0, rank: leaderboard.length + 1 };
+    const entry = leaderboard[index];
+    return {
+      wins: entry.wins,
+      participations: entry.participations || 0,  // backward compatibility
+      rank: index + 1
+    };
   }
 
-  // Active topics (per-community)
+  // Active topics (per-community) - with TTL as fallback cleanup
   async getActiveTopics(chatId) {
     return (await this.get(this._key(chatId, "active_topics"))) || {};
   }
 
   async setActiveTopics(chatId, topics) {
-    await this.set(this._key(chatId, "active_topics"), topics);
+    await this.set(this._key(chatId, "active_topics"), topics, { expirationTtl: TTL.ACTIVE_TOPICS });
   }
 
   async isActiveTopic(chatId, threadId) {
@@ -726,13 +859,13 @@ class Storage {
     await this.set(this._key(chatId, "settings", "content_mode"), mode);
   }
 
-  // Reactions (per-community)
+  // Reactions (per-community) - with TTL for automatic cleanup
   async getReactions(chatId, challengeType, challengeId, messageId) {
     return (await this.get(this._key(chatId, "reactions", challengeType, challengeId, messageId))) || {};
   }
 
   async setReactions(chatId, challengeType, challengeId, messageId, reactionsMap) {
-    await this.set(this._key(chatId, "reactions", challengeType, challengeId, messageId), reactionsMap);
+    await this.set(this._key(chatId, "reactions", challengeType, challengeId, messageId), reactionsMap, { expirationTtl: TTL.REACTIONS });
   }
 
   // ============================================
@@ -744,7 +877,7 @@ class Storage {
     return (await this.get(this._key(chatId, "suggestions", type))) || [];
   }
 
-  // Добавить новое предложение
+  // Добавить новое предложение - with TTL for automatic cleanup
   async addSuggestion(chatId, type, suggestion) {
     const suggestions = await this.getSuggestions(chatId, type);
     // Один пользователь - одно предложение на текущий цикл
@@ -752,7 +885,7 @@ class Storage {
       return { success: false, error: "already_suggested" };
     }
     suggestions.push(suggestion);
-    await this.set(this._key(chatId, "suggestions", type), suggestions);
+    await this.set(this._key(chatId, "suggestions", type), suggestions, { expirationTtl: TTL.SUGGESTIONS });
     return { success: true };
   }
 
@@ -775,7 +908,7 @@ class Storage {
     // Пересчет уникальных реакций
     suggestion.reactionCount = Object.keys(suggestion.reactions).length;
 
-    await this.set(this._key(chatId, "suggestions", type), suggestions);
+    await this.set(this._key(chatId, "suggestions", type), suggestions, { expirationTtl: TTL.SUGGESTIONS });
     return suggestion;
   }
 
@@ -826,6 +959,60 @@ class Storage {
       }
     }
     return null;
+  }
+
+  // Accept links setting (per-community) - wrapper for consistent access
+  async getAcceptLinks(chatId) {
+    return (await this.get(this._key(chatId, "settings", "accept_links"))) ?? false;
+  }
+
+  async setAcceptLinks(chatId, value) {
+    await this.set(this._key(chatId, "settings", "accept_links"), value);
+  }
+
+  // ============================================
+  // CASCADING DELETE (for community removal)
+  // ============================================
+
+  // Delete all data for a community - called when community is unregistered
+  async deleteAllCommunityData(chatId) {
+    const prefix = `community:${chatId}:`;
+    let deleted = 0;
+    let failed = 0;
+    let cursor = undefined;
+    let listError = null;
+
+    try {
+      // Iterate through all keys with prefix and delete them
+      do {
+        const result = await this.list({ prefix, cursor });
+
+        // Check if list operation failed
+        if (result.error) {
+          listError = result.error;
+          console.error(`List operation failed for community ${chatId}:`, listError);
+          break;
+        }
+
+        for (const key of result.keys) {
+          try {
+            await this.kv.delete(key.name);
+            deleted++;
+          } catch (e) {
+            console.error(`Failed to delete key ${key.name}:`, e.message);
+            failed++;
+          }
+        }
+        cursor = result.list_complete ? undefined : result.cursor;
+      } while (cursor);
+
+      const success = !listError && failed === 0;
+      console.log(`Cascading delete for community ${chatId}: deleted=${deleted}, failed=${failed}, listError=${listError}`);
+      return { success, deleted, failed, listError };
+    } catch (error) {
+      console.error(`Cascading delete error for community ${chatId}:`, error.message);
+      return { success: false, error: error.message, deleted, failed };
+    }
   }
 }
 
@@ -1235,7 +1422,7 @@ ${modesList}
       const args = text.trim().split(/\s+/).slice(1);
       const value = args[0]?.toLowerCase();
 
-      const currentValue = await storage.get(`community:${chatId}:settings:accept_links`);
+      const currentValue = await storage.getAcceptLinks(chatId);
 
       if (!value || !["on", "off", "1", "0", "true", "false"].includes(value)) {
         const status = currentValue ? "ВКЛ" : "ВЫКЛ";
@@ -1254,7 +1441,7 @@ ${modesList}
       }
 
       const newValue = ["on", "1", "true"].includes(value);
-      await storage.set(`community:${chatId}:settings:accept_links`, newValue);
+      await storage.setAcceptLinks(chatId, newValue);
 
       await tg.sendHtml(
         chatId,
@@ -1391,7 +1578,7 @@ ${modesList}
       const fmt = formatSchedule(schedule);
       const currentMode = await storage.getContentMode(chatId);
       const modeInfo = CONTENT_MODES[currentMode];
-      const acceptLinks = await storage.get(`community:${chatId}:settings:accept_links`);
+      const acceptLinks = await storage.getAcceptLinks(chatId);
       const minSuggestionReactions = await storage.getMinSuggestionReactions(chatId);
       const submissionLimits = await storage.getSubmissionLimits(chatId);
       const communityName = config.name || `ID: ${chatId}`;
@@ -1552,7 +1739,7 @@ ${formatChallenge(monthly, "Месячный")}`;
         return (a.timestamp || 0) - (b.timestamp || 0);
       });
       const list = sorted.map((s, i) =>
-        `${i + 1}. @${s.username || s.userId} — <b>${s.score}</b>`
+        `${i + 1}. @${escapeHtml(s.username || String(s.userId))} — <b>${s.score}</b>`
       ).join("\n");
 
       await tg.sendHtml(chatId, `📋 <b>${typeNames[type]} челлендж</b>\n\n<b>Тема:</b> ${escapeHtml(challenge.topic)}\n<b>До:</b> ${endDateStr}\n<b>Участников:</b> ${submissions.length}\n\n${list}`, {
@@ -1591,12 +1778,18 @@ ${formatChallenge(monthly, "Месячный")}`;
         storage.getUserStats(chatId, "weekly", userId),
         storage.getUserStats(chatId, "monthly", userId),
       ]);
-      const total = daily.wins + weekly.wins + monthly.wins;
+      const totalWins = daily.wins + weekly.wins + monthly.wins;
+      const totalParticipations = (daily.participations || 0) + (weekly.participations || 0) + (monthly.participations || 0);
 
-      const winsWord = pluralize(total, "победа", "победы", "побед");
+      const winsWord = pluralize(totalWins, "победа", "победы", "побед");
+      const partWord = pluralize(totalParticipations, "участие", "участия", "участий");
+
+      // Format: wins/participations for each type
+      const formatStat = (s) => `${s.wins}/${s.participations || 0}`;
+
       await tg.sendHtml(
         chatId,
-        `📈 <b>Ваша статистика</b>\n\n<b>Всего ${winsWord}:</b> ${total}\n\n🌅 Дневные: <b>${daily.wins}</b> (#${daily.rank})\n📅 Недельные: <b>${weekly.wins}</b> (#${weekly.rank})\n📆 Месячные: <b>${monthly.wins}</b> (#${monthly.rank})`,
+        `📈 <b>Ваша статистика</b>\n\n🏆 Побед: <b>${totalWins}</b> ${winsWord}\n🎨 Участий: <b>${totalParticipations}</b> ${partWord}\n\n🌅 Дневные: <b>${formatStat(daily)}</b> (#${daily.rank})\n📅 Недельные: <b>${formatStat(weekly)}</b> (#${weekly.rank})\n📆 Месячные: <b>${formatStat(monthly)}</b> (#${monthly.rank})\n\n<i>Формат: побед/участий</i>`,
         { message_thread_id: threadId || undefined },
       );
       return;
@@ -1640,15 +1833,19 @@ ${formatChallenge(monthly, "Месячный")}`;
       leaderboard.slice(0, 10).forEach((e, i) => {
         const medal = medals[i] || `${i + 1}.`;
         const username = escapeHtml(e.username || `User ${e.userId}`);
-        msg += `${medal} ${username} — <b>${e.wins}</b> побед\n`;
+        const participations = e.participations || 0;
+        // Show wins/participations format
+        msg += `${medal} ${username} — <b>${e.wins}</b>/${participations}\n`;
       });
+      msg += `\n<i>Формат: побед/участий</i>`;
 
       // Show user's position if not in top 10
       const userId = message.from?.id;
       if (userId) {
         const userIndex = leaderboard.findIndex((e) => e.userId === userId);
         if (userIndex >= 10) {
-          msg += `\n<i>Ваше место: #${userIndex + 1}</i>`;
+          const userEntry = leaderboard[userIndex];
+          msg += `\n<i>Ваше место: #${userIndex + 1} (${userEntry.wins}/${userEntry.participations || 0})</i>`;
         }
       }
 
@@ -1759,9 +1956,9 @@ ${formatChallenge(monthly, "Месячный")}`;
         chatId,
         `💡 <b>ПРЕДЛОЖЕНИЕ ТЕМЫ</b> (${typeNames[type]})
 
-${themeText}
+${escapeHtml(themeText)}
 
-<i>Автор: ${authorName}</i>
+<i>Автор: ${escapeHtml(authorName)}</i>
 
 👍 Реакция = голос за тему!
 Нужно <b>${minReactions}+</b> для включения в опрос.`,
@@ -1787,7 +1984,7 @@ ${themeText}
       try {
         await tg.request("deleteMessage", { chat_id: chatId, message_id: message.message_id });
       } catch (e) {
-        console.log("Could not delete suggest command:", e.message);
+        console.error("Could not delete suggest command:", e.message);
       }
 
       console.log(`Suggestion created: community=${chatId}, type=${type}, id=${suggestionId}`);
@@ -1836,7 +2033,7 @@ ${themeText}
         const status = (s.reactionCount || 0) >= minReactionsList ? "✅" : "⏳";
         const authorName = s.username ? `@${s.username}` : "Аноним";
         const themePreview = (s.theme || s.title || "").substring(0, 50) + ((s.theme || s.title || "").length > 50 ? "..." : "");
-        msg += `${status} ${themePreview} — ${s.reactionCount || 0} реакций\n   ${authorName}\n\n`;
+        msg += `${status} ${escapeHtml(themePreview)} — ${s.reactionCount || 0} реакций\n   ${escapeHtml(authorName)}\n\n`;
       }
 
       msg += `Для участия в голосовании нужно <b>${minReactionsList}+</b> реакций.`;
@@ -1853,7 +2050,7 @@ ${themeText}
                           (message.link_preview_options || message.web_page);
 
     // Check community setting for accepting link previews
-    const acceptLinks = await storage.get(`community:${chatId}:settings:accept_links`);
+    const acceptLinks = await storage.getAcceptLinks(chatId);
     const isValidSubmission = hasPhoto || hasImageDocument || (hasLinkPreview && acceptLinks);
 
     if (isValidSubmission) {
@@ -2093,10 +2290,10 @@ async function handleReaction(update, env, storage) {
       return;
     }
 
-    const reactionsKey = `community:${chatId}:reactions:${challengeType}:${challenge.id}:${reaction.message_id}`;
-    const reactionsMap = (await storage.get(reactionsKey)) || {};
-    reactionsMap[userId] = userScore;
-    await storage.set(reactionsKey, reactionsMap);
+    // Use storage methods for consistent TTL and key handling
+    const reactionsMap = await storage.getReactions(chatId, challengeType, challenge.id, reaction.message_id);
+    reactionsMap[String(userId)] = userScore;  // Convert userId to string for consistency
+    await storage.setReactions(chatId, challengeType, challenge.id, reaction.message_id, reactionsMap);
 
     // Calculate total score from all users
     const totalScore = Object.values(reactionsMap).reduce((sum, s) => sum + s, 0);
@@ -2129,7 +2326,7 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
 
     const topicId = config.topics[type];
     const previousThemes = await storage.getThemeHistory(chatId, type);
-    const contentMode = (await storage.get(`community:${chatId}:settings:content_mode`)) || DEFAULT_CONTENT_MODE;
+    const contentMode = await storage.getContentMode(chatId);
 
     // ============================================
     // ДОБАВЛЯЕМ ОДОБРЕННЫЕ ПРЕДЛОЖЕНИЯ ПОЛЬЗОВАТЕЛЕЙ
@@ -2342,9 +2539,10 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
 
         // Find matching full theme from stored options
-        // Handle truncated options (100 char limit)
+        // Handle truncated options (100 char limit) and HTML stripping
         const matchingFull = poll.options.find((o) => {
-          const short = parseTheme(o).short;
+          // Strip HTML because poll options are displayed without HTML tags
+          const short = stripHtml(parseTheme(o).short);
           if (short === winnerShort) return true;
           // If winnerShort ends with "...", compare prefix
           if (winnerShort.endsWith("...")) {
@@ -2413,7 +2611,7 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
       topic: shortTheme,
       topicFull: fullTheme,
       status: "active",
-      startedAt: Date.now(),
+      startedAt,
       endsAt,
       topicThreadId: topicId,
       announcementMessageId: announcement.message_id,
@@ -2853,7 +3051,7 @@ export default {
             return new Response("OK");
           }
           // Mark as processed (TTL: 1 hour)
-          await env.CHALLENGE_KV.put(dedupKey, "1", { expirationTtl: 3600 });
+          await env.CHALLENGE_KV.put(dedupKey, "1", { expirationTtl: TTL.WEBHOOK_DEDUP });
         }
 
         const tg = new TelegramAPI(env.BOT_TOKEN);
