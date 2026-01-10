@@ -584,7 +584,6 @@ class TelegramAPI {
       allowed_updates: [
         "message",
         "message_reaction",
-        "message_reaction_count",
         "poll",
         "poll_answer",
       ],
@@ -2190,53 +2189,6 @@ ${escapeHtml(themeText)}
   }
 }
 
-async function handleReactionCount(update, env, storage) {
-  try {
-    const reaction = update.message_reaction_count;
-    if (!reaction) return;
-
-    const chatId = reaction.chat.id;
-
-    // Check if this community is registered
-    if (!await hasAccessToChat(env, storage, chatId)) return;
-
-    // Use thread ID to determine which challenge type this belongs to
-    const threadId = reaction.message_thread_id;
-    const challengeType = await storage.isActiveTopic(chatId, threadId);
-    if (!challengeType) return;
-
-    const challenge = await storage.getChallenge(chatId, challengeType);
-    if (!challenge || challenge.status !== "active" || Date.now() >= challenge.endsAt) return;
-
-    // Check if this message is actually a submission (avoid updating non-submissions)
-    const submissions = await storage.getSubmissions(chatId, challengeType, challenge.id);
-    const submission = submissions.find((s) => s.messageId === reaction.message_id);
-    if (!submission) return; // Not a submission - ignore
-
-    // Calculate score
-    let score = 0;
-    for (const r of reaction.reactions) {
-      if (r.type.type === "emoji" && r.type.emoji !== EXCLUDED_EMOJI) {
-        score += r.total_count;
-      } else if (r.type.type === "custom_emoji" || r.type.type === "paid") {
-        score += r.total_count;
-      }
-    }
-
-    await storage.updateSubmissionScore(
-      chatId,
-      challengeType,
-      challenge.id,
-      reaction.message_id,
-      score,
-    );
-  } catch (e) {
-    console.error("handleReactionCount error:", {
-      error: e.message,
-      stack: e.stack,
-    });
-  }
-}
 
 // Handle individual reaction updates (when reaction authors are visible)
 async function handleReaction(update, env, storage) {
@@ -3114,8 +3066,6 @@ export default {
           await handleMessage(update, env, tg, storage);
         } else if (update.message_reaction) {
           await handleReaction(update, env, storage);
-        } else if (update.message_reaction_count) {
-          await handleReactionCount(update, env, storage);
         }
       } catch (e) {
         console.error("Webhook error:", {
