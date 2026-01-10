@@ -2257,7 +2257,8 @@ async function handleReaction(update, env, storage) {
 
     for (const type of ["daily", "weekly", "monthly"]) {
       const ch = await storage.getChallenge(chatId, type);
-      if (ch?.status === "active" && Date.now() < ch.endsAt) {
+      // Accept reactions for active challenges OR challenges in tiebreaker state
+      if ((ch?.status === "active" && Date.now() < ch.endsAt) || ch?.status === "tiebreaker") {
         // Check if this message is a submission in this challenge
         const submissions = await storage.getSubmissions(chatId, type, ch.id);
         const found = submissions.find(s => s.messageId === reaction.message_id);
@@ -2312,6 +2313,88 @@ async function handleReaction(update, env, storage) {
     );
 
     console.log(`Reaction scored: community=${chatId}, type=${challengeType}, msg=${reaction.message_id}, user=${userId}, userScore=${userScore}, totalScore=${totalScore}`);
+
+    // If challenge is in tiebreaker state, check if tie is resolved
+    if (challenge.status === "tiebreaker") {
+      const submissions = await storage.getSubmissions(chatId, challengeType, challenge.id);
+
+      // Get best submission per user
+      const bestSubmissionPerUser = {};
+      for (const s of submissions) {
+        const best = bestSubmissionPerUser[s.userId];
+        if (
+          !best ||
+          s.score > best.score ||
+          (s.score === best.score && (s.timestamp || 0) < (best.timestamp || 0))
+        ) {
+          bestSubmissionPerUser[s.userId] = s;
+        }
+      }
+      const uniqueSubmissions = Object.values(bestSubmissionPerUser);
+
+      // Find winners
+      const maxScore = Math.max(...uniqueSubmissions.map((s) => s.score));
+      const winners = uniqueSubmissions.filter((s) => s.score === maxScore);
+
+      // Check if tie is resolved (only one winner now)
+      if (winners.length === 1) {
+        console.log(`Tiebreaker resolved: community=${chatId}, type=${challengeType}, winner=${winners[0].userId}`);
+
+        // Get config for this community
+        const config = await storage.getConfig(chatId);
+        if (!config) return;
+
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+
+        // Announce winner
+        const winnerName = winners[0].username
+          ? `@${winners[0].username}`
+          : `Участник #${winners[0].userId}`;
+
+        await tg.sendHtml(
+          chatId,
+          `✅ <b>Ничья разрешена!</b>\n\n${ru.winnerAnnouncement(winnerName, maxScore, challengeType)}`,
+          {
+            message_thread_id: challenge.topicThreadId || undefined,
+            reply_to_message_id: winners[0].messageId,
+          },
+        );
+
+        // Forward to winners topic and add win
+        if (config.topics.winners) {
+          try {
+            await tg.forwardMessage(
+              chatId,
+              chatId,
+              winners[0].messageId,
+              {
+                message_thread_id: config.topics.winners,
+              },
+            );
+            await tg.sendHtml(
+              chatId,
+              ru.winnerAnnouncementFull(winnerName, winners[0].score, challengeType, challenge.topicFull || challenge.topic),
+              {
+                message_thread_id: config.topics.winners,
+              },
+            );
+          } catch (e) {
+            console.error("Forward error:", e);
+          }
+        }
+
+        await storage.addWin(chatId, challengeType, winners[0].userId, winners[0].username);
+
+        // Mark challenge as finished
+        challenge.status = "finished";
+        await storage.saveChallenge(chatId, challenge);
+
+        // Remove from active topics
+        const activeTopics = await storage.getActiveTopics(chatId);
+        delete activeTopics[challenge.topicThreadId];
+        await storage.setActiveTopics(chatId, activeTopics);
+      }
+    }
   } catch (e) {
     console.error("handleReaction error:", {
       error: e.message,
@@ -2451,6 +2534,26 @@ async function finishChallenge(env, chatId, config, tg, storage, type) {
       const maxScore = Math.max(...uniqueSubmissions.map((s) => s.score));
       const winners = uniqueSubmissions.filter((s) => s.score === maxScore);
 
+      // Check for tie (multiple winners with same max score)
+      if (winners.length > 1 && maxScore > 0) {
+        // TIE situation - wait for deciding vote
+        challenge.status = "tiebreaker";
+        await storage.saveChallenge(chatId, challenge);
+
+        const tieCount = winners.length;
+        await tg.sendHtml(
+          chatId,
+          `🤝 <b>НИЧЬЯ!</b>\n\n${tieCount} работы набрали по ${maxScore} ${maxScore === 1 ? 'реакции' : 'реакций'}.\n\n⏳ Ждем решающий голос...`,
+          {
+            message_thread_id: challenge.topicThreadId || undefined,
+          },
+        );
+
+        console.log(`Challenge in tiebreaker: community=${chatId}, type=${type}, winners=${tieCount}, score=${maxScore}`);
+        return; // Don't finish - wait for tiebreaker
+      }
+
+      // Single winner or no tie - proceed with normal finish
       // Format winner names
       const winnerNames = winners
         .map((w) => (w.username ? `@${w.username}` : `Участник #${w.userId}`))
