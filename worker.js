@@ -2193,6 +2193,7 @@ async function handleReaction(update, env, storage) {
       message_id: reaction.message_id,
       thread_id: reaction.message_thread_id,
       user_id: reaction.user?.id,
+      actor_chat_id: reaction.actor_chat?.id,
       new_reaction: reaction.new_reaction,
       old_reaction: reaction.old_reaction,
     }));
@@ -2203,8 +2204,12 @@ async function handleReaction(update, env, storage) {
       return;
     }
 
-    const userId = reaction.user?.id;
-    if (!userId) return;
+    // Support both user reactions and channel/anonymous admin reactions (actor_chat)
+    const voterId = reaction.user?.id || reaction.actor_chat?.id;
+    if (!voterId) {
+      console.log("Reaction ignored: no user_id or actor_chat_id", { chatId, messageId: reaction.message_id });
+      return;
+    }
 
     // ============================================
     // ПРОВЕРКА: это реакция на предложение темы?
@@ -2214,8 +2219,8 @@ async function handleReaction(update, env, storage) {
       const { suggestion, type } = suggestionResult;
 
       // Игнорируем самореакции (автор не может голосовать за своё предложение)
-      if (userId === suggestion.userId) {
-        console.log("Suggestion reaction ignored: self-reaction", { userId, messageId: reaction.message_id });
+      if (voterId === suggestion.userId) {
+        console.log("Suggestion reaction ignored: self-reaction", { voterId, messageId: reaction.message_id });
         return;
       }
 
@@ -2232,10 +2237,10 @@ async function handleReaction(update, env, storage) {
       }
 
       // Обновляем реакции на предложение
-      const updated = await storage.updateSuggestionReactions(chatId, type, reaction.message_id, userId, hasValidReaction);
+      const updated = await storage.updateSuggestionReactions(chatId, type, reaction.message_id, voterId, hasValidReaction);
 
       if (updated) {
-        console.log(`Suggestion reaction: community=${chatId}, type=${type}, msg=${reaction.message_id}, user=${userId}, valid=${hasValidReaction}, totalReactions=${updated.reactionCount}`);
+        console.log(`Suggestion reaction: community=${chatId}, type=${type}, msg=${reaction.message_id}, voter=${voterId}, valid=${hasValidReaction}, totalReactions=${updated.reactionCount}`);
       }
       return;
     }
@@ -2279,18 +2284,18 @@ async function handleReaction(update, env, storage) {
     }
     const userScore = hasValidReaction ? 1 : 0;
 
-    // Ignore self-reactions (user reacting to their own post)
-    if (submission && userId === submission.userId) {
-      console.log("Reaction ignored: self-reaction", { userId, messageId: reaction.message_id });
+    // Ignore self-reactions (user/channel reacting to their own post)
+    if (submission && voterId === submission.userId) {
+      console.log("Reaction ignored: self-reaction", { voterId, messageId: reaction.message_id });
       return;
     }
 
     // Use storage methods for consistent TTL and key handling
     const reactionsMap = await storage.getReactions(chatId, challengeType, challenge.id, reaction.message_id);
-    reactionsMap[String(userId)] = userScore;  // Convert userId to string for consistency
+    reactionsMap[String(voterId)] = userScore;  // Convert voterId to string for consistency
     await storage.setReactions(chatId, challengeType, challenge.id, reaction.message_id, reactionsMap);
 
-    // Calculate total score from all users
+    // Calculate total score from all voters
     const totalScore = Object.values(reactionsMap).reduce((sum, s) => sum + s, 0);
 
     await storage.updateSubmissionScore(
@@ -2301,7 +2306,7 @@ async function handleReaction(update, env, storage) {
       totalScore,
     );
 
-    console.log(`Reaction scored: community=${chatId}, type=${challengeType}, msg=${reaction.message_id}, user=${userId}, userScore=${userScore}, totalScore=${totalScore}`);
+    console.log(`Reaction scored: community=${chatId}, type=${challengeType}, msg=${reaction.message_id}, voter=${voterId}, userScore=${userScore}, totalScore=${totalScore}`);
   } catch (e) {
     console.error("handleReaction error:", {
       error: e.message,
