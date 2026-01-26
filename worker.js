@@ -1101,7 +1101,7 @@ async function generateThemes(apiKey, type, language = "ru", previousThemes = []
 
 ${specificInstruction}
 
-ПРИМЕРЫ (копируй разнообразие форматов и длину):
+ПРИМЕРЫ (НЕ КОПИРУЙ, создавай новые в похожем стиле):
 ${selectedCorpus.sort(() => 0.5 - Math.random()).slice(0, 50).join(", ")}
 ${history}
 
