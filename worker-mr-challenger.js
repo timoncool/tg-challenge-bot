@@ -1104,25 +1104,20 @@ async function generateThemes(apiKey, type, language = "ru", previousThemes = []
 
   if (contentMode === "vanilla") {
     selectedCorpus = corpus.vanilla;
-    specificInstruction = `ТОЛЬКО SFW (БЕЗОПАСНО): Красота, уют, природа, сказки, персонажи Disney/Ghibli/Sailor Moon.
-СТРОГИЙ ЗАПРЕТ: Никакой эротики, наготы, фетишей, мрака, крови или насилия. Темы должны быть светлыми и вдохновляющими.`;
+    specificInstruction = `РЕЖИМ: SFW, для всех возрастов. Без эротики, наготы, насилия.`;
   } else if (contentMode === "medium") {
     selectedCorpus = [...corpus.vanilla, ...corpus.medium];
-    specificInstruction = `МИКС КРАСОТЫ И ДРАМЫ: Поп-культура, культовые персонажи кино и игр (Лара Крофт, Матрица, Черепашки-ниндзя). Нуар, триллер, крутые герои, интрига.
-БЕЗ ПОРНО: Допускается мрачность и дерзость, но без открытой эротики и фетишей.`;
+    specificInstruction = `РЕЖИМ: 16+. Нуар, триллер, мрачность, интрига. Без откровенной эротики.`;
   } else if (contentMode === "nsfw") {
     selectedCorpus = corpus.nsfw;
-    specificInstruction = `ТОЛЬКО NSFW (18+): Жесткая эротика, фетиши (латекс, шибари, бондаж), сексуальные ситуации, акцент на обнаженном теле и материалах.
-ПРАВИЛО: Тема должна быть провокационной, смелой и сексуальной.`;
+    specificInstruction = `РЕЖИМ: 18+, эротика. Смотри примеры — бери разнообразие оттуда.`;
   }
 
   const history = previousThemes.length > 0 ? `\nИсключить (уже использованы): ${previousThemes.join(", ")}` : "";
 
-  const prompt = `Придумай 6 тем для ${typeName} арт-челленджа.
+  const prompt = `Придумай 6 новых тем для ${typeName} арт-челленджа. ${specificInstruction}
 
-${specificInstruction}
-
-ПРИМЕРЫ (НЕ КОПИРУЙ, создавай новые в похожем стиле):
+Вот примеры хороших тем (создавай ПОХОЖИЕ по стилю и длине):
 ${selectedCorpus.sort(() => 0.5 - Math.random()).slice(0, 50).join(", ")}
 ${history}
 
