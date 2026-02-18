@@ -1223,7 +1223,12 @@ ${history}
       }
 
       const data = await response.json();
-      text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      // Gemini 2.5+ может вернуть thinking в parts[0], текст в последнем part
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      text = "";
+      for (const part of parts) {
+        if (part.text && !part.thought) text = part.text;
+      }
     }
 
     console.log("AI API статус:", response.status);
