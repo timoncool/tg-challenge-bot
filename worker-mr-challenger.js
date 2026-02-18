@@ -1166,7 +1166,7 @@ ${history}
   try {
     console.log("AI API запрос...", { provider, model, type, contentMode, hasApiKey: !!apiKey });
 
-    let response, text;
+    let response, text, _debugRaw;
 
     if (provider === "openai") {
       // OpenAI-compatible (GLM, OpenAI, Groq, etc.)
@@ -1223,6 +1223,7 @@ ${history}
       }
 
       const data = await response.json();
+      _debugRaw = data;
       // Gemini 2.5+ может вернуть thinking в parts[0], текст в последнем part
       const parts = data.candidates?.[0]?.content?.parts || [];
       text = "";
@@ -1234,7 +1235,7 @@ ${history}
     console.log("AI API статус:", response.status);
 
     if (!text) {
-      throw new Error("API пустой ответ");
+      throw new Error(`API пустой ответ. Raw: ${JSON.stringify(_debugRaw).substring(0, 300)}`);
     }
 
     // Парсим JSON
