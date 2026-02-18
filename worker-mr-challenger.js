@@ -1154,7 +1154,7 @@ ${history}
     console.log("GLM API запрос...", { type, contentMode, hasApiKey: !!apiKey });
 
     const response = await fetch(
-      "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "https://api.z.ai/api/paas/v4/chat/completions",
       {
         method: "POST",
         headers: {
@@ -1162,7 +1162,7 @@ ${history}
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "glm-4-flash",
+          model: "glm-4.7-flash",
           messages: [
             { role: "system", content: "Ты — креативный директор арт-сообщества. Отвечай ТОЛЬКО валидным JSON массивом строк." },
             { role: "user", content: prompt },
