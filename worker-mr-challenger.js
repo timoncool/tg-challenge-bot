@@ -1168,8 +1168,8 @@ ${history}
             { role: "user", content: prompt },
           ],
           temperature: 0.95,
-          max_tokens: 1000,
-          response_format: { type: "json_object" },
+          max_tokens: 4096,
+          thinking: { type: "disabled" },
         }),
       },
     );
@@ -1183,7 +1183,10 @@ ${history}
     }
 
     const data = await response.json();
-    const text = data.choices?.[0]?.message?.content || "";
+    let text = data.choices?.[0]?.message?.content || "";
+
+    // Убираем markdown обёртку если есть (```json ... ```)
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
 
     if (!text) {
       const reason = data.error?.message || "пустой ответ";
