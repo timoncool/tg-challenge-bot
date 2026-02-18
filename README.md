@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
 [![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white)](https://core.telegram.org/bots)
-[![Google AI](https://img.shields.io/badge/Google-Gemini_AI-4285F4?logo=google&logoColor=white)](https://ai.google.dev/)
+[![ZhipuAI GLM](https://img.shields.io/badge/ZhipuAI-GLM-1a73e8?logo=data:image/svg+xml;base64,PHN2Zy8+&logoColor=white)](https://open.bigmodel.cn/)
 [![GitHub stars](https://img.shields.io/github/stars/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/network/members)
 
@@ -70,7 +70,7 @@
 | Имя | Значение | Обязательно |
 |-----|----------|-------------|
 | `BOT_TOKEN` | Токен от BotFather | ✅ Да |
-| `GEMINI_API_KEY` | API-ключ Google AI | ✅ Да |
+| `GLM_API_KEY` | API-ключ ZhipuAI (GLM) | ✅ Да |
 | `ADMIN_SECRET` | Любой пароль для HTTP API | ✅ Да |
 | `WEBHOOK_SECRET` | Секрет для проверки webhook (любая строка) | ⬜ Нет |
 
@@ -200,7 +200,7 @@ curl -H "Authorization: Bearer ВАШ_ADMIN_SECRET" \
 | `/cs_daily` | Статистика дневного челленджа |
 | `/cs_weekly` | Статистика недельного |
 | `/cs_monthly` | Статистика месячного |
-| `/test_ai` | Проверить работу Gemini API |
+| `/test_ai` | Проверить работу GLM API |
 
 ---
 
@@ -381,7 +381,7 @@ MIT — используйте свободно!
 ## 🙏 Благодарности
 
 - [Cloudflare Workers](https://workers.cloudflare.com/) — бесплатный serverless
-- [Google AI](https://ai.google.dev/) — генерация тем через Gemini
+- [ZhipuAI](https://open.bigmodel.cn/) — генерация тем через GLM
 
 ---
 
