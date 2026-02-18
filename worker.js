@@ -1004,22 +1004,16 @@ class Storage {
 // ============================================
 
 function getAiConfig(env) {
-  const provider = (env.AI_PROVIDER || "gemini").toLowerCase();
-  const model = env.AI_MODEL || "gemini-flash-lite-latest";
-  const apiKey = env.AI_API_KEY || env.GEMINI_API_KEY;
-  let apiUrl = env.AI_API_URL;
-  if (!apiUrl) {
-    if (provider === "openai") {
-      apiUrl = "https://api.openai.com/v1/chat/completions";
-    } else {
-      apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    }
-  }
-  return { provider, apiUrl, apiKey, model };
+  return {
+    provider: env.AI_PROVIDER,
+    apiUrl: env.AI_API_URL,
+    apiKey: env.AI_API_KEY,
+    model: env.AI_MODEL,
+  };
 }
 
 async function generateThemes(aiConfig, type, language = "ru", previousThemes = [], contentMode = "vanilla") {
-  const { provider = "gemini", apiUrl, apiKey, model } = aiConfig;
+  const { provider, apiUrl, apiKey, model } = aiConfig;
   const typeNames = { daily: "ДНЕВНОГО", weekly: "НЕДЕЛЬНОГО", monthly: "МЕСЯЧНОГО" };
   const typeName = typeNames[type] || "ДНЕВНОГО";
 
@@ -1177,7 +1171,7 @@ ${history}
       text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
 
     } else {
-      const url = apiUrl || `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      const url = apiUrl;
       response = await fetch(url, {
         method: "POST",
         headers: {
