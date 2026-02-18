@@ -1143,12 +1143,10 @@ ${history}
         body: JSON.stringify({
           model: "glm-4.7-flash",
           messages: [
-            { role: "system", content: "Ты — креативный директор арт-сообщества. Отвечай ТОЛЬКО валидным JSON массивом строк." },
+            { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
             { role: "user", content: prompt },
           ],
           temperature: 0.95,
-          max_tokens: 4096,
-          thinking: { type: "disabled" },
         }),
       },
     );
