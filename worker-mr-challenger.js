@@ -845,8 +845,17 @@ class Storage {
   async addThemeToHistory(chatId, type, theme) {
     const history = await this.getThemeHistory(chatId, type);
     history.unshift(theme);
-    // Keep only last 10 themes
-    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 10));
+    // Храним последние 50 тем для исключения повторов
+    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 50));
+  }
+
+  // Массовое добавление тем (все варианты опроса)
+  async addThemesToHistory(chatId, type, themes) {
+    const history = await this.getThemeHistory(chatId, type);
+    const lowerHistory = history.map(t => t.toLowerCase());
+    const newThemes = themes.filter(t => !lowerHistory.includes(t.toLowerCase()));
+    history.unshift(...newThemes);
+    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 50));
   }
 
   // Content mode (per-community)
@@ -2409,6 +2418,9 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     } catch (e) {
       console.error("Failed to pin poll:", e.message);
     }
+
+    // Сохраняем ВСЕ варианты опроса в историю, чтобы они не повторялись в будущих опросах
+    await storage.addThemesToHistory(chatId, type, pollOptions);
 
     // Очищаем ВСЕ предложения после создания опроса
     // (не только одобренные, чтобы пользователи могли предложить новые темы в следующем цикле)
