@@ -824,8 +824,18 @@ class Storage {
   async addThemeToHistory(chatId, type, theme) {
     const history = await this.getThemeHistory(chatId, type);
     history.unshift(theme);
-    // Keep only last 10 themes
-    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 10));
+    // Храним последние 50 тем для исключения повторов
+    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 50));
+  }
+
+  // Массовое добавление тем (все варианты опроса)
+  async addThemesToHistory(chatId, type, themes) {
+    const history = await this.getThemeHistory(chatId, type);
+    // Добавляем только новые (которых ещё нет в истории)
+    const lowerHistory = history.map(t => t.toLowerCase());
+    const newThemes = themes.filter(t => !lowerHistory.includes(t.toLowerCase()));
+    history.unshift(...newThemes);
+    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 50));
   }
 
   // Content mode (per-community)
@@ -991,7 +1001,7 @@ class Storage {
 }
 
 // ============================================
-// AI SERVICE (Gemini)
+// AI SERVICE (GLM / ZhipuAI)
 // ============================================
 
 async function generateThemes(apiKey, type, language = "ru", previousThemes = [], contentMode = "vanilla") {
@@ -1120,61 +1130,87 @@ ${history}
 ["тема 1", "тема 2", "тема 3", "тема 4", "тема 5", "тема 6"]`;
 
   try {
-    console.log("Gemini API request starting...", { type, contentMode, hasApiKey: !!apiKey });
+    console.log("GLM API запрос...", { type, contentMode, hasApiKey: !!apiKey });
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
+      "https://api.z.ai/api/paas/v4/chat/completions",
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": apiKey,
+          "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 1.0,
-            maxOutputTokens: 1000,
-            responseMimeType: "application/json",
-          },
+          model: "glm-4.7-flash",
+          messages: [
+            { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.95,
         }),
       },
     );
 
-    console.log("Gemini API response status:", response.status, response.statusText);
+    console.log("GLM API статус:", response.status, response.statusText);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("Gemini API error response:", { status: response.status, body: errorText });
+      console.error("GLM API ошибка:", { status: response.status, body: errorText });
       throw new Error(`API error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    let text = data.choices?.[0]?.message?.content || "";
+
+    // Убираем markdown обёртку если есть (```json ... ```)
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
 
     if (!text) {
-      const reason = data.promptFeedback?.blockReason
-        || data.error?.message
-        || (data.candidates?.length === 0 ? "no candidates" : "unknown");
+      const reason = data.error?.message || "пустой ответ";
       throw new Error(`API пустой ответ: ${reason}`);
     }
 
-    // With responseMimeType: "application/json", text is already clean JSON
-    const themes = JSON.parse(text);
-
-    if (!Array.isArray(themes) || themes.length < 6) {
-      throw new Error(`Нужно 6 тем, получено: ${Array.isArray(themes) ? themes.length : typeof themes}`);
+    // Парсим JSON — может быть массив или объект с полем themes/items/etc
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (parseErr) {
+      // Пробуем извлечь JSON массив из текста
+      const match = text.match(/\[[\s\S]*\]/);
+      if (match) {
+        parsed = JSON.parse(match[0]);
+      } else {
+        throw new Error(`Не удалось распарсить ответ: ${text.substring(0, 200)}`);
+      }
     }
 
-    // Handle both string arrays and object arrays (extract topic field if object)
+    // Поддержка разных форматов: массив напрямую или объект с полем
+    let themes;
+    if (Array.isArray(parsed)) {
+      themes = parsed;
+    } else if (typeof parsed === "object" && parsed !== null) {
+      // Ищем первый массив в объекте
+      themes = Object.values(parsed).find(v => Array.isArray(v));
+      if (!themes) {
+        throw new Error(`Ответ — объект без массива: ${JSON.stringify(parsed).substring(0, 200)}`);
+      }
+    } else {
+      throw new Error(`Неожиданный формат: ${typeof parsed}`);
+    }
+
+    if (themes.length < 6) {
+      throw new Error(`Нужно 6 тем, получено: ${themes.length}`);
+    }
+
+    // Извлекаем строки из массива (поддержка и строк, и объектов)
     const validThemes = themes.slice(0, 6).map(t =>
       typeof t === "string" ? t.trim() : (t.topic || t.theme || t.text || t.content || String(t))
     );
-    console.log("Gemini parsed themes:", validThemes);
+    console.log("GLM темы:", validThemes);
     return validThemes;
 
   } catch (e) {
-    console.error("Gemini AI error:", { message: e.message, stack: e.stack });
+    console.error("GLM AI ошибка:", { message: e.message, stack: e.stack });
     throw e;
   }
 }
@@ -1632,7 +1668,7 @@ ${modesList}
 
 <b>Статистика</b>
 /status · /cs_daily · /cs_weekly · /cs_monthly
-/test_ai — проверить Gemini API
+/test_ai — проверить GLM API
 
 <b>Настройка тем</b>
 /set_daily · /set_weekly · /set_monthly · /set_winners
@@ -1782,14 +1818,14 @@ ${formatChallenge(monthly, "👑 Месячный")}`;
       return;
     }
 
-    // Admin: Test Gemini API - тестирует боевой промпт для 6 тем
+    // Admin: Test GLM API - тестирует боевой промпт для 6 тем
     if (command === "/test_ai" && isAdmin) {
-      await tg.sendHtml(chatId, "🔄 <i>Тестирую Gemini API...</i>", { message_thread_id: threadId || undefined });
+      await tg.sendHtml(chatId, "🔄 <i>Тестирую GLM API...</i>", { message_thread_id: threadId || undefined });
       try {
         const contentMode = await storage.getContentMode(chatId);
-        const themes = await generateThemes(env.GEMINI_API_KEY, "daily", "ru", [], contentMode);
+        const themes = await generateThemes(env.GLM_API_KEY, "daily", "ru", [], contentMode);
 
-        let msg = `✅ <b>Gemini API</b> (режим: <i>${contentMode}</i>)\n\n`;
+        let msg = `✅ <b>GLM API</b> (режим: <i>${contentMode}</i>)\n\n`;
         themes.forEach((theme, i) => {
           msg += `${i + 1}. ${theme}\n\n`;
         });
@@ -2349,7 +2385,7 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     let aiThemes = [];
 
     if (aiThemeCount >= 2) {
-      aiThemes = await generateThemes(env.GEMINI_API_KEY, type, "ru", previousThemes, contentMode);
+      aiThemes = await generateThemes(env.GLM_API_KEY, type, "ru", previousThemes, contentMode);
       // Ограничиваем количество AI-тем
       aiThemes = aiThemes.slice(0, aiThemeCount);
     }
@@ -2399,6 +2435,9 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     } catch (e) {
       console.error("Failed to pin poll:", e.message);
     }
+
+    // Сохраняем ВСЕ варианты опроса в историю, чтобы они не повторялись в будущих опросах
+    await storage.addThemesToHistory(chatId, type, pollOptions);
 
     // Очищаем ВСЕ предложения после создания опроса
     // (не только одобренные, чтобы пользователи могли предложить новые темы в следующем цикле)
