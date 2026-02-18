@@ -1153,51 +1153,24 @@ ${history}
   try {
     console.log("GLM API запрос...", { type, contentMode, hasApiKey: !!apiKey });
 
-    const GLM_ENDPOINTS = [
+    const response = await fetch(
       "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-      "https://api.z.ai/api/paas/v4/chat/completions",
-    ];
-
-    const requestBody = JSON.stringify({
-      model: "glm-4.7-flash",
-      messages: [
-        { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.95,
-    });
-
-    let response;
-    let lastError;
-    for (const endpoint of GLM_ENDPOINTS) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
-        console.log("GLM trying:", endpoint);
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-          },
-          body: requestBody,
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        if (response.ok) break;
-        lastError = new Error(`${endpoint}: HTTP ${response.status}`);
-        console.warn("GLM endpoint failed:", endpoint, response.status);
-        response = null;
-      } catch (err) {
-        lastError = err;
-        console.warn("GLM endpoint error:", endpoint, err.message);
-        response = null;
-      }
-    }
-
-    if (!response) {
-      throw lastError || new Error("All GLM endpoints failed");
-    }
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "glm-4.7-flash",
+          messages: [
+            { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.95,
+        }),
+      },
+    );
 
     console.log("GLM API статус:", response.status, response.statusText);
 
