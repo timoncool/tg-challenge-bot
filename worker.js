@@ -1000,10 +1000,26 @@ class Storage {
 }
 
 // ============================================
-// AI SERVICE (Gemini)
+// AI SERVICE (multi-provider: gemini / openai-compatible)
 // ============================================
 
-async function generateThemes(apiKey, type, language = "ru", previousThemes = [], contentMode = "vanilla") {
+function getAiConfig(env) {
+  const provider = (env.AI_PROVIDER || "gemini").toLowerCase();
+  const model = env.AI_MODEL || "gemini-flash-lite-latest";
+  const apiKey = env.AI_API_KEY || env.GEMINI_API_KEY;
+  let apiUrl = env.AI_API_URL;
+  if (!apiUrl) {
+    if (provider === "openai") {
+      apiUrl = "https://api.openai.com/v1/chat/completions";
+    } else {
+      apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    }
+  }
+  return { provider, apiUrl, apiKey, model };
+}
+
+async function generateThemes(aiConfig, type, language = "ru", previousThemes = [], contentMode = "vanilla") {
+  const { provider = "gemini", apiUrl, apiKey, model } = aiConfig;
   const typeNames = { daily: "ДНЕВНОГО", weekly: "НЕДЕЛЬНОГО", monthly: "МЕСЯЧНОГО" };
   const typeName = typeNames[type] || "ДНЕВНОГО";
 
@@ -1129,11 +1145,40 @@ ${history}
 ["тема 1", "тема 2", "тема 3", "тема 4", "тема 5", "тема 6"]`;
 
   try {
-    console.log("Gemini API request starting...", { type, contentMode, hasApiKey: !!apiKey });
+    console.log("AI API запрос...", { provider, model, type, contentMode, hasApiKey: !!apiKey });
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent`,
-      {
+    let response, text;
+
+    if (provider === "openai") {
+      response = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.95,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("AI API ошибка:", { status: response.status, body: errorText });
+        throw new Error(`API error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      text = data.choices?.[0]?.message?.content || "";
+      text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+
+    } else {
+      const url = apiUrl || `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1147,43 +1192,49 @@ ${history}
             responseMimeType: "application/json",
           },
         }),
-      },
-    );
+      });
 
-    console.log("Gemini API response status:", response.status, response.statusText);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("AI API ошибка:", { status: response.status, body: errorText });
+        throw new Error(`API error: ${response.status} - ${errorText}`);
+      }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Gemini API error response:", { status: response.status, body: errorText });
-      throw new Error(`API error: ${response.status} - ${errorText}`);
+      const data = await response.json();
+      text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     }
 
-    const data = await response.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    console.log("AI API статус:", response.status);
 
     if (!text) {
-      const reason = data.promptFeedback?.blockReason
-        || data.error?.message
-        || (data.candidates?.length === 0 ? "no candidates" : "unknown");
-      throw new Error(`API пустой ответ: ${reason}`);
+      throw new Error("API пустой ответ");
     }
 
-    // With responseMimeType: "application/json", text is already clean JSON
-    const themes = JSON.parse(text);
-
-    if (!Array.isArray(themes) || themes.length < 6) {
-      throw new Error(`Нужно 6 тем, получено: ${Array.isArray(themes) ? themes.length : typeof themes}`);
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (_) {
+      const match = text.match(/\[[\s\S]*\]/);
+      if (match) {
+        parsed = JSON.parse(match[0]);
+      } else {
+        throw new Error(`Не удалось распарсить: ${text.substring(0, 200)}`);
+      }
     }
 
-    // Handle both string arrays and object arrays (extract topic field if object)
+    let themes = Array.isArray(parsed) ? parsed : Object.values(parsed).find(v => Array.isArray(v));
+    if (!themes || themes.length < 6) {
+      throw new Error(`Нужно 6 тем, получено: ${themes ? themes.length : 0}`);
+    }
+
     const validThemes = themes.slice(0, 6).map(t =>
       typeof t === "string" ? t.trim() : (t.topic || t.theme || t.text || t.content || String(t))
     );
-    console.log("Gemini parsed themes:", validThemes);
+    console.log("AI темы:", validThemes);
     return validThemes;
 
   } catch (e) {
-    console.error("Gemini AI error:", { message: e.message, stack: e.stack });
+    console.error("AI ошибка:", { message: e.message, stack: e.stack });
     throw e;
   }
 }
@@ -1793,12 +1844,13 @@ ${formatChallenge(monthly, "👑 Месячный")}`;
 
     // Admin: Test Gemini API - тестирует боевой промпт для 6 тем
     if (command === "/test_ai" && isAdmin) {
-      await tg.sendHtml(chatId, "🔄 <i>Тестирую Gemini API...</i>", { message_thread_id: threadId || undefined });
+      const aiCfg = getAiConfig(env);
+      await tg.sendHtml(chatId, `🔄 <i>Проверяю AI (${aiCfg.provider}/${aiCfg.model})...</i>`, { message_thread_id: threadId || undefined });
       try {
         const contentMode = await storage.getContentMode(chatId);
-        const themes = await generateThemes(env.GEMINI_API_KEY, "daily", "ru", [], contentMode);
+        const themes = await generateThemes(aiCfg, "daily", "ru", [], contentMode);
 
-        let msg = `✅ <b>Gemini API</b> (режим: <i>${contentMode}</i>)\n\n`;
+        let msg = `✅ <b>${aiCfg.provider}/${aiCfg.model}</b> (режим: <i>${contentMode}</i>)\n\n`;
         themes.forEach((theme, i) => {
           msg += `${i + 1}. ${theme}\n\n`;
         });
@@ -2358,7 +2410,7 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     let aiThemes = [];
 
     if (aiThemeCount >= 2) {
-      aiThemes = await generateThemes(env.GEMINI_API_KEY, type, "ru", previousThemes, contentMode);
+      aiThemes = await generateThemes(getAiConfig(env), type, "ru", previousThemes, contentMode);
       // Ограничиваем количество AI-тем
       aiThemes = aiThemes.slice(0, aiThemeCount);
     }
