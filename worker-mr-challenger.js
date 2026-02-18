@@ -1154,7 +1154,7 @@ ${history}
     console.log("GLM API запрос...", { type, contentMode, hasApiKey: !!apiKey });
 
     const response = await fetch(
-      "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+      "https://api.z.ai/api/paas/v4/chat/completions",
       {
         method: "POST",
         headers: {
