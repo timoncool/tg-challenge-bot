@@ -2456,9 +2456,10 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     }
 
     // Отправляем poll напрямую (темы теперь короткие и влезают)
+    const pollQ = `[${env.AI_MODEL || 'unknown'}] ${ru.pollQuestion(type)}`;
     const poll = await tg.sendPoll(
       chatId,
-      ru.pollQuestion(type),
+      pollQ,
       pollOptions,
       {
         message_thread_id: topicId || undefined,
