@@ -831,7 +831,6 @@ class Storage {
   // Массовое добавление тем (все варианты опроса)
   async addThemesToHistory(chatId, type, themes) {
     const history = await this.getThemeHistory(chatId, type);
-    // Добавляем только новые (которых ещё нет в истории)
     const lowerHistory = history.map(t => t.toLowerCase());
     const newThemes = themes.filter(t => !lowerHistory.includes(t.toLowerCase()));
     history.unshift(...newThemes);
@@ -1001,10 +1000,20 @@ class Storage {
 }
 
 // ============================================
-// AI SERVICE (GLM / ZhipuAI)
+// AI SERVICE (multi-provider: gemini / openai-compatible)
 // ============================================
 
-async function generateThemes(apiKey, type, language = "ru", previousThemes = [], contentMode = "vanilla") {
+function getAiConfig(env) {
+  return {
+    provider: env.AI_PROVIDER,
+    apiUrl: env.AI_API_URL,
+    apiKey: env.AI_API_KEY,
+    model: env.AI_MODEL,
+  };
+}
+
+async function generateThemes(aiConfig, type, language = "ru", previousThemes = [], contentMode = "vanilla") {
+  const { provider, apiUrl, apiKey, model } = aiConfig;
   const typeNames = { daily: "ДНЕВНОГО", weekly: "НЕДЕЛЬНОГО", monthly: "МЕСЯЧНОГО" };
   const typeName = typeNames[type] || "ДНЕВНОГО";
 
@@ -1130,87 +1139,107 @@ ${history}
 ["тема 1", "тема 2", "тема 3", "тема 4", "тема 5", "тема 6"]`;
 
   try {
-    console.log("GLM API запрос...", { type, contentMode, hasApiKey: !!apiKey });
+    console.log("AI API запрос...", { provider, model, type, contentMode, hasApiKey: !!apiKey });
 
-    const response = await fetch(
-      "https://api.z.ai/api/paas/v4/chat/completions",
-      {
+    let response, text;
+
+    if (provider === "openai") {
+      response = await fetch(apiUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "glm-4.7-flash",
+          model,
           messages: [
             { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
             { role: "user", content: prompt },
           ],
           temperature: 0.95,
         }),
-      },
-    );
+      });
 
-    console.log("GLM API статус:", response.status, response.statusText);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("AI API ошибка:", { status: response.status, body: errorText });
+        throw new Error(`API error: ${response.status} - ${errorText}`);
+      }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("GLM API ошибка:", { status: response.status, body: errorText });
-      throw new Error(`API error: ${response.status} - ${errorText}`);
+      const data = await response.json();
+      text = data.choices?.[0]?.message?.content || "";
+      text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+
+    } else {
+      const url = apiUrl;
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 1.0,
+            responseMimeType: "application/json",
+          },
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("AI API ошибка:", { status: response.status, body: errorText });
+        throw new Error(`API error: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      // Gemini 2.5+ может вернуть thinking в parts[0], текст в последнем part
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      text = "";
+      for (const part of parts) {
+        if (part.text && !part.thought) text = part.text;
+      }
     }
 
-    const data = await response.json();
-    let text = data.choices?.[0]?.message?.content || "";
-
-    // Убираем markdown обёртку если есть (```json ... ```)
-    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    console.log("AI API статус:", response.status);
 
     if (!text) {
-      const reason = data.error?.message || "пустой ответ";
-      throw new Error(`API пустой ответ: ${reason}`);
+      throw new Error("API пустой ответ");
     }
 
-    // Парсим JSON — может быть массив или объект с полем themes/items/etc
     let parsed;
     try {
       parsed = JSON.parse(text);
-    } catch (parseErr) {
-      // Пробуем извлечь JSON массив из текста
+    } catch (_) {
       const match = text.match(/\[[\s\S]*\]/);
       if (match) {
         parsed = JSON.parse(match[0]);
       } else {
-        throw new Error(`Не удалось распарсить ответ: ${text.substring(0, 200)}`);
+        throw new Error(`Не удалось распарсить: ${text.substring(0, 200)}`);
       }
     }
 
-    // Поддержка разных форматов: массив напрямую или объект с полем
-    let themes;
-    if (Array.isArray(parsed)) {
-      themes = parsed;
-    } else if (typeof parsed === "object" && parsed !== null) {
-      // Ищем первый массив в объекте
-      themes = Object.values(parsed).find(v => Array.isArray(v));
-      if (!themes) {
-        throw new Error(`Ответ — объект без массива: ${JSON.stringify(parsed).substring(0, 200)}`);
-      }
-    } else {
-      throw new Error(`Неожиданный формат: ${typeof parsed}`);
+    let themes = Array.isArray(parsed) ? parsed : Object.values(parsed).find(v => Array.isArray(v));
+    if (!themes || themes.length < 6) {
+      throw new Error(`Нужно 6 тем, получено: ${themes ? themes.length : 0}`);
     }
 
-    if (themes.length < 6) {
-      throw new Error(`Нужно 6 тем, получено: ${themes.length}`);
-    }
-
-    // Извлекаем строки из массива (поддержка и строк, и объектов)
     const validThemes = themes.slice(0, 6).map(t =>
       typeof t === "string" ? t.trim() : (t.topic || t.theme || t.text || t.content || String(t))
     );
-    console.log("GLM темы:", validThemes);
+    console.log("AI темы:", validThemes);
     return validThemes;
 
   } catch (e) {
-    console.error("GLM AI ошибка:", { message: e.message, stack: e.stack });
+    console.error("AI ошибка:", { message: e.message, stack: e.stack });
     throw e;
   }
 }
@@ -1668,7 +1697,7 @@ ${modesList}
 
 <b>Статистика</b>
 /status · /cs_daily · /cs_weekly · /cs_monthly
-/test_ai — проверить GLM API
+/test_ai — проверить Gemini API
 
 <b>Настройка тем</b>
 /set_daily · /set_weekly · /set_monthly · /set_winners
@@ -1818,14 +1847,15 @@ ${formatChallenge(monthly, "👑 Месячный")}`;
       return;
     }
 
-    // Admin: Test GLM API - тестирует боевой промпт для 6 тем
+    // Admin: Test Gemini API - тестирует боевой промпт для 6 тем
     if (command === "/test_ai" && isAdmin) {
-      await tg.sendHtml(chatId, "🔄 <i>Тестирую GLM API...</i>", { message_thread_id: threadId || undefined });
+      const aiCfg = getAiConfig(env);
+      await tg.sendHtml(chatId, `🔄 <i>Проверяю AI (${aiCfg.provider}/${aiCfg.model})...</i>`, { message_thread_id: threadId || undefined });
       try {
         const contentMode = await storage.getContentMode(chatId);
-        const themes = await generateThemes(env.GLM_API_KEY, "daily", "ru", [], contentMode);
+        const themes = await generateThemes(aiCfg, "daily", "ru", [], contentMode);
 
-        let msg = `✅ <b>GLM API</b> (режим: <i>${contentMode}</i>)\n\n`;
+        let msg = `✅ <b>${aiCfg.provider}/${aiCfg.model}</b> (режим: <i>${contentMode}</i>)\n\n`;
         themes.forEach((theme, i) => {
           msg += `${i + 1}. ${theme}\n\n`;
         });
@@ -2385,7 +2415,7 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     let aiThemes = [];
 
     if (aiThemeCount >= 2) {
-      aiThemes = await generateThemes(env.GLM_API_KEY, type, "ru", previousThemes, contentMode);
+      aiThemes = await generateThemes(getAiConfig(env), type, "ru", previousThemes, contentMode);
       // Ограничиваем количество AI-тем
       aiThemes = aiThemes.slice(0, aiThemeCount);
     }
