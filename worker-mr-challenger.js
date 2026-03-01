@@ -846,7 +846,7 @@ class Storage {
     const history = await this.getThemeHistory(chatId, type);
     history.unshift(theme);
     // Храним последние 100 тем для исключения повторов
-    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 100));
+    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 50));
   }
 
   // Массовое добавление тем (все варианты опроса)
@@ -855,7 +855,7 @@ class Storage {
     const lowerHistory = history.map(t => t.toLowerCase());
     const newThemes = themes.filter(t => !lowerHistory.includes(t.toLowerCase()));
     history.unshift(...newThemes);
-    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 100));
+    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 50));
   }
 
   // Content mode (per-community)
