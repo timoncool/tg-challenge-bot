@@ -1139,7 +1139,10 @@ async function generateThemes(aiConfig, type, language = "ru", previousThemes = 
 ПРАВИЛО: Тема должна быть провокационной, смелой и сексуальной.`;
   }
 
-  const history = previousThemes.length > 0 ? `\nИсключить (уже использованы): ${previousThemes.join(", ")}` : "";
+  const history = previousThemes.length > 0 ? `\n═══════════════════════════════════════════
+ЗАПРЕЩЕНО ПОВТОРЯТЬ! ЭТИ ТЕМЫ УЖЕ ИСПОЛЬЗОВАЛИСЬ, НЕ БЕРИ ИХ:
+${previousThemes.join(", ")}
+═══════════════════════════════════════════` : "";
 
   const prompt = `Ты — креативный директор арт-сообщества. Твоя задача: родить 6 мощных тем для ${typeName} челленджа.
 Режим: ${contentMode.toUpperCase()}.
@@ -1168,7 +1171,6 @@ ${specificInstruction}
 БАЗА ПРИМЕРОВ (стиль, наглость, длина — используй для вдохновения, НЕ копируй):
 ${selectedCorpus.join(", ")}
 ${history}
-
 ОТВЕТЬ ТОЛЬКО JSON МАССИВОМ СТРОК:
 ["тема 1", "тема 2", "тема 3", "тема 4", "тема 5", "тема 6"]`;
 
