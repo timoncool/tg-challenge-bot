@@ -16,6 +16,10 @@ curl -X PUT "https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/workers/
   -F 'worker-mr-challenger.js=@worker-mr-challenger.js;type=application/javascript+module'
 ```
 
+### Файлы:
+- **`worker-mr-challenger.js`** — ОСНОВНОЙ РАБОЧИЙ ФАЙЛ, деплоится на все воркеры
+- **`worker.js`** — образец/шаблон, НЕ деплоить
+
 ### Воркеры:
 - **Продакшн**: `tg-challenge-bot` — файл `worker-mr-challenger.js`
 - **Тест**: `tg-test-challange-bot` — файл `worker-mr-challenger.js`
