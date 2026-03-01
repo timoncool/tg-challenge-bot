@@ -1310,8 +1310,8 @@ ${history}
       if (filtered.length < validThemes.length) {
         console.log(`Фильтр дубликатов: убрано ${validThemes.length - filtered.length} повторов, осталось ${filtered.length} тем`);
       }
-      // Если после фильтрации осталось мало тем — берём запасные из корпуса
-      if (filtered.length < 4) {
+      // Если после фильтрации стало меньше 6 — добиваем из корпуса
+      if (filtered.length < 6) {
         const corpusBackup = selectedCorpus
           .filter(t => !lowerHistory.includes(t.toLowerCase()) && !filtered.map(f => f.toLowerCase()).includes(t.toLowerCase()))
           .sort(() => Math.random() - 0.5);
