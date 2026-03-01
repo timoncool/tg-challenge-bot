@@ -1,0 +1,8 @@
+name = "tg-test-challange-bot"
+main = "worker-mr-challenger.js"
+compatibility_date = "2024-01-01"
+account_id = "e3391acd7ec261a0d13d20956a7b3668"
+
+[[kv_namespaces]]
+binding = "CHALLENGE_KV"
+id = "69b8fd57d7e942c988d9d6318c0fe4bb"
