@@ -1255,6 +1255,45 @@ ${history}
     const validThemes = themes.slice(0, 6).map(t =>
       typeof t === "string" ? t.trim() : (t.topic || t.theme || t.text || t.content || String(t))
     );
+
+    // Программная фильтрация: убираем темы которые AI проигнорировал из списка исключений
+    if (previousThemes.length > 0) {
+      const lowerHistory = previousThemes.map(t => t.toLowerCase());
+      const filtered = validThemes.filter(theme => {
+        const lower = theme.toLowerCase();
+        // Точное совпадение
+        if (lowerHistory.includes(lower)) {
+          console.log(`Фильтр дубликатов: убрана тема "${theme}" (точное совпадение)`);
+          return false;
+        }
+        // Частичное совпадение: если тема содержится в истории или наоборот (>4 символов)
+        if (lower.length > 4) {
+          for (const hist of lowerHistory) {
+            if (hist.length > 4 && (lower.includes(hist) || hist.includes(lower))) {
+              console.log(`Фильтр дубликатов: убрана тема "${theme}" (похожа на "${hist}")`);
+              return false;
+            }
+          }
+        }
+        return true;
+      });
+      if (filtered.length < validThemes.length) {
+        console.log(`Фильтр дубликатов: убрано ${validThemes.length - filtered.length} повторов, осталось ${filtered.length} тем`);
+      }
+      // Если после фильтрации осталось мало тем — берём запасные из корпуса
+      if (filtered.length < 4) {
+        const corpusBackup = selectedCorpus
+          .filter(t => !lowerHistory.includes(t.toLowerCase()) && !filtered.map(f => f.toLowerCase()).includes(t.toLowerCase()))
+          .sort(() => Math.random() - 0.5);
+        while (filtered.length < 6 && corpusBackup.length > 0) {
+          filtered.push(corpusBackup.shift());
+        }
+        console.log(`Добавлены запасные темы из корпуса, итого: ${filtered.length}`);
+      }
+      console.log("AI темы (после фильтрации):", filtered);
+      return filtered;
+    }
+
     console.log("AI темы:", validThemes);
     return validThemes;
 
