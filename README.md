@@ -1,15 +1,16 @@
-# 🎯 TG Challenge Bot
+<div align="center">
 
-> Telegram-бот для проведения творческих челленджей в сообществах нейро-арта
+# TG Challenge Bot
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
-[![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white)](https://core.telegram.org/bots)
-[![ZhipuAI GLM](https://img.shields.io/badge/ZhipuAI-GLM-1a73e8?logo=data:image/svg+xml;base64,PHN2Zy8+&logoColor=white)](https://open.bigmodel.cn/)
-[![GitHub stars](https://img.shields.io/github/stars/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/timoncool/tg-challenge-bot?style=social)](https://github.com/timoncool/tg-challenge-bot/network/members)
+**AI-антиспам бот для Telegram — челленджи с генерацией тем на Cloudflare Workers, бесплатный serverless.**
+
+[![Stars](https://img.shields.io/github/stars/timoncool/tg-challenge-bot?style=flat-square)](https://github.com/timoncool/tg-challenge-bot/stargazers)
+[![License](https://img.shields.io/github/license/timoncool/tg-challenge-bot?style=flat-square)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/timoncool/tg-challenge-bot?style=flat-square)](https://github.com/timoncool/tg-challenge-bot/commits)
 
 ![Preview](assets/preview.png)
+
+</div>
 
 ## ✨ Возможности
 
@@ -385,9 +386,19 @@ MIT — используйте свободно!
 
 ---
 
-Проект развивается [Nerual Dreaming](https://t.me/nerual_dreming) — основателем [ArtGeneration.me](https://artgeneration.me/), [техноблогером](https://www.youtube.com/@nerual_dreming) и нейро-евангелистом.
+## Авторы
 
----
+- **Nerual Dreming** — [Telegram](https://t.me/nerual_dreming) | [neuro-cartel.com](https://neuro-cartel.com) | [ArtGeneration.me](https://artgeneration.me)
+
+## Другие проекты [@timoncool](https://github.com/timoncool)
+
+| Проект | Описание |
+|--------|----------|
+| [telegram-api-mcp](https://github.com/timoncool/telegram-api-mcp) | Telegram Bot API как MCP-сервер |
+| [Bulka](https://github.com/timoncool/Bulka) | Платформа лайв-кодинга музыки |
+| [ACE-Step Studio](https://github.com/timoncool/ACE-Step-Studio) | AI-студия музыки — песни, вокал, каверы, клипы |
+| [VideoSOS](https://github.com/timoncool/videosos) | AI-видеопродакшн в браузере |
+| [GitLife](https://github.com/timoncool/gitlife) | Жизнь в неделях — интерактивный календарь |
 
 ## Поддержать автора
 
@@ -400,7 +411,13 @@ MIT — используйте свободно!
 - **USDT (TRC20):** `TQST9Lp2TjK6FiVkn4fwfGUee7NmkxEE7C`
 
 
-## ⭐ Star History
+## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=date&legend=top-left)](https://www.star-history.com/#timoncool/tg-challenge-bot&type=date&legend=top-left)
+<a href="https://www.star-history.com/?repos=timoncool%2Ftg-challenge-bot&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=timoncool/tg-challenge-bot&type=date&legend=top-left" />
+ </picture>
+</a>
 
