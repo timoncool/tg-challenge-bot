@@ -89,9 +89,11 @@
 | Имя | Значение | Обязательно |
 |-----|----------|-------------|
 | `BOT_TOKEN` | Токен от BotFather | ✅ Да |
-| `GLM_API_KEY` | API-ключ ZhipuAI (GLM) | ✅ Да |
+| `GEMINI_API_KEY` | API-ключ Google AI Studio (Gemini) — провайдер AI по умолчанию | ✅ Да |
 | `ADMIN_SECRET` | Любой пароль для HTTP API | ✅ Да |
 | `WEBHOOK_SECRET` | Секрет для проверки webhook (любая строка) | ⬜ Нет |
+
+> 💡 Если ставишь админку — там в секции `TOKENS` можно сохранить OpenRouter ключ и через UI переключить движок на Claude / GPT / Llama / любую модель из 350+ без перезаливки воркера. См. [`admin/`](admin/).
 
 > 💡 `WEBHOOK_SECRET` повышает безопасность, проверяя что запросы приходят именно от Telegram.
 
@@ -219,7 +221,7 @@ curl -H "Authorization: Bearer ВАШ_ADMIN_SECRET" \
 | `/cs_daily` | Статистика дневного челленджа |
 | `/cs_weekly` | Статистика недельного |
 | `/cs_monthly` | Статистика месячного |
-| `/test_ai` | Проверить работу GLM API |
+| `/test_ai` | Проверить работу AI (Gemini / OpenRouter) |
 
 ---
 
@@ -400,7 +402,8 @@ MIT — используйте свободно!
 ## 🙏 Благодарности
 
 - [Cloudflare Workers](https://workers.cloudflare.com/) — бесплатный serverless
-- [ZhipuAI](https://open.bigmodel.cn/) — генерация тем через GLM
+- [Google AI Studio](https://aistudio.google.com/) — Gemini, генерация тем
+- [OpenRouter](https://openrouter.ai/) — доступ к 350+ моделям одним токеном (опционально, через админку)
 
 ---
 
