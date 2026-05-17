@@ -26,6 +26,24 @@
 - 💡 **Предложение тем**: участники могут предлагать свои темы
 - 🎭 **Режимы контента**: vanilla / medium / nsfw
 - ☁️ **Serverless**: работает на Cloudflare Workers (бесплатно!)
+- 🎛️ **Веб-админка** (опционально, в [`admin/`](admin/)) — управление AI/расписанием/текстами без перезаливки кода
+
+---
+
+## 🎛️ Веб-админка
+
+В папке [`admin/`](admin/) лежит готовая Cloudflare Pages админка к боту: смена AI-движка на лету, редактирование расписаний и текстов, лог запросов и затрат, KV explorer.
+
+[![Admin Dashboard](admin/docs/screenshots/01-dashboard.png)](admin/README.md)
+
+| | |
+|---|---|
+| **AI Engine** — токены и presets в одном месте | **AI Test** — 6 тем за секунду, видно цену |
+| [![](admin/docs/screenshots/02-ai-engine.png)](admin/README.md) | [![](admin/docs/screenshots/03-ai-test.png)](admin/README.md) |
+| **AI Stats** — затраты по дням / моделям | **Prompts** — инструкции и корпус референсов |
+| [![](admin/docs/screenshots/04-ai-stats.png)](admin/README.md) | [![](admin/docs/screenshots/05-prompts.png)](admin/README.md) |
+
+Подробная инструкция, архитектура, KV-схема и установка → **[`admin/README.md`](admin/README.md)**.
 
 ---
 

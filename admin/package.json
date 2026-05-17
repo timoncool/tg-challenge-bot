@@ -1,0 +1,44 @@
+{
+  "name": "tg-challenge-bot-admin",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Admin panel + ops scripts for tg-challenge-bot",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "pages:deploy": "npm run build && node scripts/pages-deploy.mjs",
+    "pages:setup": "node scripts/pages-setup.mjs",
+    "kv:backup": "node scripts/kv-backup.mjs",
+    "kv:restore": "node scripts/kv-restore.mjs",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@mantine/core": "^9.2.1",
+    "@mantine/dates": "^9.2.1",
+    "@mantine/form": "^9.2.1",
+    "@mantine/hooks": "^9.2.1",
+    "@mantine/notifications": "^9.2.1",
+    "@tabler/icons-react": "^3.44.0",
+    "@tanstack/react-query": "^5.100.10",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.15.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260517.1",
+    "@types/node": "^25.8.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "postcss": "^8.5.0",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1",
+    "typescript": "^5.7.0",
+    "vite": "^8.0.13"
+  }
+}

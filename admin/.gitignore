@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+.wrangler/
+.dev.vars
+
+# Backups stay tracked (this IS the safety net), but exclude WIP/temp dumps
+backups/*.tmp.json
+backups/*.partial.json

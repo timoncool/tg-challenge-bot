@@ -1,0 +1,277 @@
+/* ─── fonts ─────────────────────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap");
+
+/* ─── design tokens — SaaS 2026 ─────────────────────────────────────────── */
+:root {
+  /* base surfaces — deep purple-tinged dark */
+  --bg-base: #0a0a0f;
+  --bg-deep: #07070b;
+  --bg-1: rgba(255, 255, 255, 0.025);
+  --bg-2: rgba(255, 255, 255, 0.04);
+  --bg-3: rgba(255, 255, 255, 0.06);
+
+  /* borders — hairline glass */
+  --border: rgba(255, 255, 255, 0.06);
+  --border-bright: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.18);
+
+  /* text */
+  --fg: #f4f4f6;
+  --fg-dim: #a1a1aa;
+  --fg-faint: #71717a;
+  --fg-mute: #3f3f46;
+
+  /* primary — electric violet */
+  --accent: #8b5cf6;
+  --accent-bright: #a78bfa;
+  --accent-soft: rgba(139, 92, 246, 0.12);
+  --accent-hairline: rgba(139, 92, 246, 0.32);
+  --accent-glow: rgba(139, 92, 246, 0.35);
+
+  /* secondary — electric mint (highlights, free badges) */
+  --mint: #2dd4bf;
+  --mint-soft: rgba(45, 212, 191, 0.12);
+
+  /* state colors */
+  --green: #34d399;
+  --green-soft: rgba(52, 211, 153, 0.12);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, 0.12);
+  --orange: #fb923c;
+  --orange-soft: rgba(251, 146, 60, 0.12);
+  --red: #f87171;
+  --red-soft: rgba(248, 113, 113, 0.12);
+  --blue: #60a5fa;
+
+  /* typography */
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", "SF Mono", Menlo, monospace;
+
+  /* shadows & glows */
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.04), 0 24px 48px -12px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 1px 0 rgba(255, 255, 255, 0.06), 0 32px 64px -16px rgba(139, 92, 246, 0.18);
+  --shadow-btn: 0 1px 0 rgba(255, 255, 255, 0.12) inset, 0 8px 24px -8px rgba(139, 92, 246, 0.4);
+
+  /* radii — friendly soft corners */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+
+  /* easing */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  color-scheme: dark;
+}
+
+/* ─── reset / base ──────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; padding: 0; min-height: 100%; }
+
+body {
+  background: var(--bg-deep);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.011em;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* gradient mesh background — animated, very subtle */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -10%;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 800px 600px at 15% 10%,  rgba(139, 92, 246, 0.15), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 90% 30%,  rgba(96, 165, 250, 0.10), transparent 60%),
+    radial-gradient(ellipse 600px 700px at 50% 100%, rgba(45, 212, 191, 0.08),  transparent 60%);
+  filter: blur(40px);
+  animation: meshDrift 30s ease-in-out infinite alternate;
+}
+
+/* grain overlay for texture */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 100;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@keyframes meshDrift {
+  0%   { transform: translate(0,    0) scale(1); }
+  50%  { transform: translate(-3%,  2%) scale(1.05); }
+  100% { transform: translate(2%,  -2%) scale(1); }
+}
+
+::selection { background: var(--accent-soft); color: var(--fg); }
+
+/* tabular figures */
+.tnum, .mono { font-feature-settings: "tnum" 1, "ss01" 1; }
+.mono { font-family: var(--font-mono); }
+
+/* hairline divider */
+.hair {
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--border-bright), transparent);
+}
+
+/* status dot */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+  vertical-align: 1px;
+  flex-shrink: 0;
+}
+.dot.green   { background: var(--green); box-shadow: 0 0 12px rgba(52, 211, 153, 0.7); }
+.dot.amber   { background: var(--amber); box-shadow: 0 0 12px rgba(251, 191, 36, 0.7); animation: pulse 2.4s ease-in-out infinite; }
+.dot.violet  { background: var(--accent); box-shadow: 0 0 14px rgba(139, 92, 246, 0.7); }
+.dot.red     { background: var(--red); box-shadow: 0 0 14px rgba(248, 113, 113, 0.75); animation: pulse 1.4s ease-in-out infinite; }
+.dot.muted   { background: var(--fg-mute); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-in { animation: fadeIn 0.5s var(--ease) both; }
+
+/* glass card utility */
+.glass {
+  background: var(--bg-1);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.glass-strong {
+  background: var(--bg-2);
+  backdrop-filter: blur(24px) saturate(200%);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  border: 1px solid var(--border-bright);
+  border-radius: var(--r-lg);
+}
+
+/* hover lift for interactive cards */
+.lift {
+  transition: transform 0.25s var(--ease), box-shadow 0.25s var(--ease), border-color 0.2s;
+}
+.lift:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-pop);
+  border-color: var(--border-bright);
+}
+
+/* gradient text utility */
+.grad-text {
+  background: linear-gradient(120deg, var(--fg) 0%, var(--accent-bright) 60%, var(--mint) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* ─── Mantine surface overrides ────────────────────────────────────────── */
+.mantine-AppShell-main { background: transparent !important; }
+.mantine-AppShell-navbar {
+  background: rgba(10, 10, 15, 0.6) !important;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-right: 1px solid var(--border) !important;
+}
+.mantine-Card-root {
+  background: var(--bg-1) !important;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-color: var(--border) !important;
+  box-shadow: var(--shadow-card) !important;
+  border-radius: var(--r-lg) !important;
+}
+.mantine-Paper-root { background: var(--bg-1) !important; border-color: var(--border) !important; border-radius: var(--r-lg) !important; }
+.mantine-Modal-content,
+.mantine-Modal-header {
+  background: rgba(15, 15, 22, 0.92) !important;
+  backdrop-filter: blur(28px) saturate(180%);
+  border-color: var(--border-bright) !important;
+}
+.mantine-Modal-content { border-radius: var(--r-lg) !important; }
+.mantine-Input-input,
+.mantine-PasswordInput-input {
+  background: var(--bg-1) !important;
+  border-color: var(--border) !important;
+  border-radius: var(--r-sm) !important;
+  color: var(--fg) !important;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.mantine-Input-input:focus,
+.mantine-PasswordInput-input:focus,
+.mantine-Input-input:focus-within,
+.mantine-PasswordInput-input:focus-within {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18) !important;
+}
+.mantine-NavLink-root { border-radius: var(--r-sm) !important; }
+.mantine-NavLink-root[data-active] { background: var(--accent-soft) !important; }
+.mantine-Button-root {
+  border-radius: var(--r-sm) !important;
+  font-weight: 500 !important;
+  transition: all 0.18s var(--ease);
+}
+.mantine-Button-root[data-variant="default"] {
+  background: var(--bg-1) !important;
+  border-color: var(--border) !important;
+}
+.mantine-Button-root[data-variant="default"]:hover {
+  background: var(--bg-2) !important;
+  border-color: var(--border-bright) !important;
+}
+
+/* primary CTA — violet gradient */
+.btn-primary {
+  background: linear-gradient(180deg, var(--accent-bright) 0%, var(--accent) 100%) !important;
+  color: white !important;
+  border: 1px solid var(--accent) !important;
+  box-shadow: var(--shadow-btn) !important;
+  font-weight: 500 !important;
+}
+.btn-primary:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.btn-primary:active { transform: translateY(0); }
+.btn-primary:disabled { opacity: 0.4; filter: none; transform: none; }
+
+/* pill / badge */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+.pill.accent { background: var(--accent-soft); border-color: var(--accent-hairline); color: var(--accent-bright); }
+.pill.green  { background: var(--green-soft); border-color: rgba(52,211,153,0.32); color: var(--green); }
+.pill.amber  { background: var(--amber-soft); border-color: rgba(251,191,36,0.32); color: var(--amber); }
+.pill.red    { background: var(--red-soft); border-color: rgba(248,113,113,0.32); color: var(--red); }
+.pill.mint   { background: var(--mint-soft); border-color: rgba(45,212,191,0.32); color: var(--mint); }

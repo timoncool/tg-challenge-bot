@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" shape-rendering="geometricPrecision">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#8b5cf6"/>
+      <stop offset="55%"  stop-color="#6d28d9"/>
+      <stop offset="100%" stop-color="#0fb990"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fff" stop-opacity="0.18"/>
+      <stop offset="60%" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="0.4"/>
+    </filter>
+    <!-- C monogram with a bolt notch carved out of the right opening -->
+    <mask id="mark">
+      <rect width="64" height="64" fill="#000"/>
+      <!-- C ring -->
+      <circle cx="32" cy="32" r="18" fill="#fff"/>
+      <circle cx="32" cy="32" r="11" fill="#000"/>
+      <!-- right opening of C -->
+      <rect x="32" y="22" width="22" height="20" fill="#000"/>
+      <!-- bolt slot: thin diagonal lightning glyph re-cut from the C body -->
+      <path d="M30 16 L20 36 L29 36 L25 50 L40 28 L31 28 Z" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <rect width="64" height="64" rx="14" fill="url(#shine)"/>
+  <rect width="64" height="64" rx="14" fill="#fff" mask="url(#mark)" filter="url(#soft)"/>
+</svg>

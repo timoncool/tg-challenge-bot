@@ -1510,17 +1510,22 @@ ${history}
         if (aiConfig.referer) headers["HTTP-Referer"] = aiConfig.referer;
         if (aiConfig.title)   headers["X-Title"] = aiConfig.title;
       }
+      const reqBody = {
+        model,
+        messages: [
+          { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
+          { role: "user", content: prompt },
+        ],
+      };
+      // Forward temperature только если задан явно — модели GPT-5/o3/Gemini Pro могут rejectать дефолт.
+      if (typeof aiConfig.temperature === "number") reqBody.temperature = aiConfig.temperature;
+      // OpenRouter returns usage.cost (USD) only when explicitly asked.
+      // Without this flag stats show $0 even though the call was billable.
+      if (provider === "openrouter") reqBody.usage = { include: true };
       response = await fetch(apiUrl, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
-            { role: "user", content: prompt },
-          ],
-          temperature: typeof aiConfig.temperature === "number" ? aiConfig.temperature : 0.95,
-        }),
+        body: JSON.stringify(reqBody),
       });
 
       if (!response.ok) {
@@ -2971,10 +2976,10 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
     await finishChallenge(env, chatId, config, tg, storage, type);
 
     const poll = await storage.getPoll(chatId, type);
-    let shortTheme = "Свободная тема";
-    let fullTheme =
-      "Свободная тема — создайте что угодно, дайте волю фантазии!";
+    let shortTheme = null;   // null = ещё не выбрана; никаких "Свободная тема" по умолчанию
+    let fullTheme  = null;
     let voteCount = 0;
+    let themeSource = "poll"; // "poll" | "ai-emergency"
 
     if (poll) {
       try {
@@ -3030,6 +3035,59 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
       }
       await storage.deletePoll(chatId, type);
+    }
+
+    // EMERGENCY: poll отсутствовал ИЛИ Telegram отдал пустой winnerShort.
+    // Раньше тут шла "Свободная тема". Теперь — генерим тему AI прямо сейчас
+    // с retry-цепочкой: per-community config → global config → env, каждый по 3 попытки.
+    if (!shortTheme) {
+      const contentMode = await storage.getContentMode(chatId);
+      const previousThemes = await storage.getThemeHistory(chatId, type);
+      // Build a chain of configs to try in order.
+      const chain = [];
+      try {
+        const perCmty = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId);
+        chain.push(perCmty);
+        // If per-community was actually KV-global override, don't add global twice
+        if (perCmty.source === "kv:community") {
+          const global_ = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, null);
+          if (global_.source !== perCmty.source) chain.push(global_);
+        }
+      } catch (e) {
+        console.error("emergency: loadEffectiveAiConfig failed:", e.message);
+      }
+
+      outer: for (const aiCfg of chain) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const themes = await generateThemesLogged(aiCfg, type, "ru", previousThemes, contentMode, env.CHALLENGE_KV, chatId);
+            if (Array.isArray(themes) && themes.length > 0) {
+              const parsed = parseTheme(themes[0]);
+              shortTheme = parsed.short;
+              fullTheme = themes[0];
+              themeSource = `ai-emergency:${aiCfg.source}:try${attempt}`;
+              console.warn(`startChallenge: no poll for ${type}, used emergency AI (${aiCfg.provider}/${aiCfg.model}, ${themeSource})`);
+              break outer;
+            }
+            console.warn(`emergency AI returned empty (${aiCfg.source}, try ${attempt})`);
+          } catch (e) {
+            console.error(`emergency AI try ${attempt} on ${aiCfg.source} failed:`, e.message);
+            // exponential backoff between attempts: 0.5s, 1s, 2s
+            await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt - 1)));
+          }
+        }
+      }
+    }
+
+    // Если и AI не помог — НЕ создаём челлендж + алерт владельцу.
+    if (!shortTheme) {
+      const ownerChatId = parseInt(env.OWNER_CHAT_ID, 10);
+      const errMsg = `❗ Не удалось запустить ${type} челлендж в чате ${chatId} (${config.name || ""}): нет poll и AI упал. Челлендж НЕ создан.`;
+      console.error(errMsg);
+      if (Number.isFinite(ownerChatId)) {
+        try { await tg.sendHtml(ownerChatId, errMsg); } catch {}
+      }
+      return; // выход без создания challenge
     }
 
     const topicId = config.topics[type];
@@ -3211,6 +3269,45 @@ async function handleCron(env, tg, storage, cron) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // Admin: delete a specific message (by chat_id + message_id)
+    // POST /admin/delete-message?chat_id=X&message_id=Y  (Bearer ADMIN_SECRET)
+    if (url.pathname === "/admin/delete-message" && request.method === "POST") {
+      const auth = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && auth !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+      }
+      const chatId = parseInt(url.searchParams.get("chat_id"), 10);
+      const messageId = parseInt(url.searchParams.get("message_id"), 10);
+      if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) {
+        return new Response(JSON.stringify({ error: "chat_id + message_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      }
+      try {
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        await tg.request("deleteMessage", { chat_id: chatId, message_id: messageId });
+        return new Response(JSON.stringify({ ok: true, chat_id: chatId, message_id: messageId }), { headers: { "Content-Type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 502, headers: { "Content-Type": "application/json" } });
+      }
+    }
+
+    // Admin: list recent updates (for finding leaked messages)
+    // GET /admin/recent-updates  (Bearer ADMIN_SECRET) → calls Telegram getUpdates
+    if (url.pathname === "/admin/recent-updates" && request.method === "GET") {
+      const auth = request.headers.get("Authorization");
+      if (env.ADMIN_SECRET && auth !== `Bearer ${env.ADMIN_SECRET}`) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
+      }
+      try {
+        const tg = new TelegramAPI(env.BOT_TOKEN);
+        // getUpdates is incompatible with webhooks — drop webhook first won't do, just call
+        // with allowed_updates=[] and timeout=0 to peek. May return empty if webhook is set.
+        const updates = await tg.request("getUpdates", { timeout: 0, limit: 100 });
+        return new Response(JSON.stringify({ count: updates.length, updates }, null, 2), { headers: { "Content-Type": "application/json" } });
+      } catch (e) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 502, headers: { "Content-Type": "application/json" } });
+      }
+    }
 
     // Health check
     if (url.pathname === "/" || url.pathname === "/health") {
