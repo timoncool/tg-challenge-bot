@@ -70,6 +70,34 @@ const fmt = {
 // ЛОКАЛИЗАЦИЯ
 // ============================================
 
+// ============================================
+// MESSAGES OVERRIDE (settings:messages KV) — управляется из админки
+// ============================================
+// Кеш на инстанс воркера (живёт ~1 invocation, чем меньше — тем чаще читаем KV).
+let __MSG_CACHE = { at: 0, data: null };
+async function loadMessages(kv) {
+  // 60s in-memory cache to avoid KV read on every reaction handler
+  if (__MSG_CACHE.data && Date.now() - __MSG_CACHE.at < 60_000) return __MSG_CACHE.data;
+  try {
+    const o = (await kv.get("settings:messages", "json")) || {};
+    __MSG_CACHE = { at: Date.now(), data: o };
+    return o;
+  } catch (e) {
+    console.error("loadMessages failed:", e.message);
+    return {};
+  }
+}
+// helper — pick override value or default
+function pickMsg(override, key, fallback) {
+  return override && Object.prototype.hasOwnProperty.call(override, key)
+    ? override[key] : fallback;
+}
+// helper — substitute {placeholders}
+function tpl(str, vars) {
+  if (typeof str !== "string") return "";
+  return str.replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? String(vars[k]) : ""));
+}
+
 // Реплики Mr. Challenger для подтверждения работ
 const submissionReactions = [
   "✅ <b>Принято.</b> Выглядит стильно. 🍷",
@@ -83,8 +111,10 @@ const submissionReactions = [
   "👌 Хорошо вышло. <b>Записано.</b>",
 ];
 
-function getRandomReaction() {
-  return submissionReactions[Math.floor(Math.random() * submissionReactions.length)];
+function getRandomReaction(override) {
+  const arr = (override && Array.isArray(override.submissionReactions) && override.submissionReactions.length)
+    ? override.submissionReactions : submissionReactions;
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
 // Реплики Mr. Challenger для победителей
@@ -101,8 +131,10 @@ const winnerPhrases = [
   "Вот это уровень. 🔥",
 ];
 
-function getRandomWinnerPhrase() {
-  return winnerPhrases[Math.floor(Math.random() * winnerPhrases.length)];
+function getRandomWinnerPhrase(override) {
+  const arr = (override && Array.isArray(override.winnerPhrases) && override.winnerPhrases.length)
+    ? override.winnerPhrases : winnerPhrases;
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
 const ru = {
@@ -196,6 +228,61 @@ ${getRandomWinnerPhrase()}`;
 <i>Удачи в челленджах. 🍷</i>`;
   },
 };
+
+// ============================================
+// MESSAGE HELPERS — берут override из KV (settings:messages) или дефолты
+// ============================================
+function msgWorkAccepted(override, current, max) {
+  if (max === 1) return getRandomReaction(override);
+  return `${getRandomReaction(override)} (${current}/${max})`;
+}
+function msgSubmissionLimit(override, current, max) {
+  const workWord = pluralize(current, "работу", "работы", "работ");
+  const maxWord = pluralize(max, "работа", "работы", "работ");
+  const tmpl = pickMsg(override, "submissionLimitReached",
+    "⚠️ Уже <b>{current}</b> {workWord} в игре. Максимум — <b>{max}</b> {maxWord}. Терпение.");
+  return tpl(tmpl, { current, max, workWord, maxWord });
+}
+function msgNoSubmissions(override) {
+  return pickMsg(override, "noSubmissions",
+    "🤔 <i>Тишина? Жаль. Надеюсь, вы копите силы для следующего раза.</i>");
+}
+function msgWinnerAnnouncement(override, username, score) {
+  const tmpl = pickMsg(override, "winnerAnnouncementTemplate",
+    "🥂 <b>ПОБЕДИТЕЛЬ</b>\n\n{username} забирает этот раунд.\nРезультат: <b>{score}</b> голосов.\n\n{phrase}");
+  return tpl(tmpl, { username: escapeHtml(username), score, phrase: getRandomWinnerPhrase(override) });
+}
+function msgWinnerAnnouncementFull(override, username, score, topic) {
+  const tmpl = pickMsg(override, "winnerAnnouncementFullTemplate",
+    "🏆 <b>ЛУЧШАЯ РАБОТА</b>\n\nАвтор: {username}\nОценка сообщества: <b>{score}</b> ✨\n\n<i>Тема была: {topic}</i>\n{phrase}");
+  return tpl(tmpl, {
+    username: escapeHtml(username), score, topic: stripHtml(topic),
+    phrase: getRandomWinnerPhrase(override),
+  });
+}
+function msgChallengeAnnouncement(override, type, topic, startDate, endDate, voteCount) {
+  const titles = pickMsg(override, "challengeAnnouncementTitles", {
+    daily: "⚡ ЧЕЛЛЕНДЖ ДНЯ", weekly: "🎩 ЧЕЛЛЕНДЖ НЕДЕЛИ", monthly: "👑 ЧЕЛЛЕНДЖ МЕСЯЦА",
+  });
+  const voteLine = voteCount > 0 ? ` (${voteCount} голосов)` : "";
+  const tmpl = pickMsg(override, "challengeAnnouncementTemplate",
+    "<b>{title}</b>\n\nТема выбрана{voteLine}.\nПрием работ открыт до {endDate}.\n\n💎 <b>ЗАДАНИЕ:</b>\n{topic}\n\nЖду ваши работы в этом треде.\nЦеним стиль, идею и качество исполнения.\n\n<i>/stats · /leaderboard · /current</i>");
+  return tpl(tmpl, { title: titles[type] || titles.daily, voteLine, topic, endDate, startDate });
+}
+function msgPollQuestion(override) {
+  return pickMsg(override, "pollQuestion", "Время выбора. Какую тему возьмем в работу?");
+}
+function msgLeaderboardTitle(override, type) {
+  const labels = pickMsg(override, "leaderboardLabels", { daily: "по дням", weekly: "за неделю", monthly: "за месяц" });
+  const tmpl = pickMsg(override, "leaderboardTitle", "📜 <b>Рейтинг лучших авторов ({label})</b>");
+  return tpl(tmpl, { label: labels[type] || type });
+}
+function msgHelp(override, schedule) {
+  const fmtSched = formatSchedule(schedule);
+  const tmpl = pickMsg(override, "helpMessage",
+    "<b>Приветствую. Я Mr. Challenger.</b>\nКурирую творческие соревнования в этом чате.\n\n<b>Как это работает:</b>\n1. Выбираем тему\n2. Вы публикуете работы\n3. Сообщество выбирает лучших реакциями\n\n<b>Расписание:</b>\n• Дневные — {dailySched}\n• Недельные — {weeklySched}\n• Месячные — {monthlySched}\n\n<b>Команды:</b>\n/current — статус челленджей\n/stats — ваша статистика\n/leaderboard — рейтинг победителей\n/suggest — предложить тему\n\n<i>Удачи в челленджах. 🍷</i>");
+  return tpl(tmpl, { dailySched: fmtSched.daily, weeklySched: fmtSched.weekly, monthlySched: fmtSched.monthly });
+}
 
 // ============================================
 // КОНФИГУРАЦИЯ (MULTI-COMMUNITY)
@@ -1025,13 +1112,141 @@ class Storage {
 // ============================================
 
 // AI конфиг из env: AI_PROVIDER, AI_API_URL, AI_API_KEY, AI_MODEL
-function getAiConfig(env) {
+// LEGACY — оставлен как fallback. Основной путь — loadEffectiveAiConfig.
+function getAiConfigFromEnv(env) {
   return {
     provider: env.AI_PROVIDER,
     apiUrl: env.AI_API_URL,
     apiKey: env.AI_API_KEY,
     model: env.AI_MODEL,
   };
+}
+// Backward-compat shim — старый код вызывает getAiConfig(env).
+function getAiConfig(env) {
+  return getAiConfigFromEnv(env);
+}
+
+// Запись AI-попытки в:
+//   1) community:{chatId}:ai_history       — last 50, TTL 7d (детальный лог per-community)
+//   2) ai:history:global                   — last 200, TTL 30d (общий лог всех вызовов)
+//   3) stats:ai:daily:YYYY-MM-DD           — агрегат за день (counts/cost/duration по провайдеру)
+async function logAiAttempt(kv, chatId, entry) {
+  const stamped = { ts: Date.now(), ...entry, chatId: chatId ?? null };
+  try {
+    // per-community
+    if (chatId) {
+      const key = `community:${chatId}:ai_history`;
+      const cur = (await kv.get(key, "json")) || [];
+      cur.unshift(stamped);
+      await kv.put(key, JSON.stringify(cur.slice(0, 50)), { expirationTtl: 7 * 24 * 3600 });
+    }
+    // global
+    const gkey = "ai:history:global";
+    const g = (await kv.get(gkey, "json")) || [];
+    g.unshift(stamped);
+    await kv.put(gkey, JSON.stringify(g.slice(0, 200)), { expirationTtl: 30 * 24 * 3600 });
+    // daily aggregate
+    const day = new Date().toISOString().slice(0, 10);
+    const skey = `stats:ai:daily:${day}`;
+    const s = (await kv.get(skey, "json")) || {
+      day, totals: { calls: 0, success: 0, fail: 0, totalDurationMs: 0, totalCostUsd: 0, totalTokens: 0 },
+      byProvider: {}, byModel: {},
+    };
+    s.totals.calls++;
+    s.totals[entry.success ? "success" : "fail"]++;
+    s.totals.totalDurationMs += entry.durationMs || 0;
+    if (typeof entry.cost_usd === "number") s.totals.totalCostUsd += entry.cost_usd;
+    if (typeof entry.total_tokens === "number") s.totals.totalTokens += entry.total_tokens;
+    const pkey = entry.provider || "?";
+    s.byProvider[pkey] = s.byProvider[pkey] || { calls: 0, cost: 0, tokens: 0 };
+    s.byProvider[pkey].calls++;
+    if (typeof entry.cost_usd === "number") s.byProvider[pkey].cost += entry.cost_usd;
+    if (typeof entry.total_tokens === "number") s.byProvider[pkey].tokens += entry.total_tokens;
+    const mkey = `${entry.provider || "?"}/${entry.model || "?"}`;
+    s.byModel[mkey] = s.byModel[mkey] || { calls: 0, cost: 0, tokens: 0 };
+    s.byModel[mkey].calls++;
+    if (typeof entry.cost_usd === "number") s.byModel[mkey].cost += entry.cost_usd;
+    if (typeof entry.total_tokens === "number") s.byModel[mkey].tokens += entry.total_tokens;
+    await kv.put(skey, JSON.stringify(s), { expirationTtl: 90 * 24 * 3600 });
+  } catch (e) {
+    console.error("logAiAttempt failed:", e.message);
+  }
+}
+
+// Обёртка над generateThemes с логированием в KV.
+async function generateThemesLogged(aiConfig, type, language, previousThemes, contentMode, kv, chatId) {
+  const startedAt = Date.now();
+  try {
+    const themes = await generateThemes(aiConfig, type, language, previousThemes, contentMode);
+    const usage = themes._usage || {};
+    await logAiAttempt(kv, chatId, {
+      provider: aiConfig.provider, model: aiConfig.model, source: aiConfig.source,
+      type, contentMode, durationMs: Date.now() - startedAt,
+      success: true, themesCount: Array.isArray(themes) ? themes.length : 0,
+      prompt_tokens: usage.prompt_tokens ?? null,
+      completion_tokens: usage.completion_tokens ?? null,
+      total_tokens: usage.total_tokens ?? null,
+      cost_usd: usage.cost_usd ?? null,
+    });
+    return themes;
+  } catch (e) {
+    await logAiAttempt(kv, chatId, {
+      provider: aiConfig.provider, model: aiConfig.model, source: aiConfig.source,
+      type, contentMode, durationMs: Date.now() - startedAt,
+      success: false, error: String(e.message || e).slice(0, 300),
+    });
+    throw e;
+  }
+}
+
+// Эффективный AI-конфиг для конкретной комьюнити:
+//   community override (community:{chatId}:settings:ai) > global (settings:ai:global) > env (legacy)
+// Управляется из админки tg-challenge-bot-admin без redeploy воркера.
+async function loadEffectiveAiConfig(env, kv, chatId = null) {
+  const tryConfig = async (key) => {
+    try {
+      const cfg = await kv.get(key, "json");
+      if (!cfg) return null;
+      const missing = [];
+      if (!cfg.apiKey) missing.push("apiKey");
+      if (!cfg.provider) missing.push("provider");
+      if (!cfg.apiUrl) missing.push("apiUrl");
+      if (!cfg.model) missing.push("model");
+      if (missing.length === 0) return cfg;
+      // Invalid stored cfg — log and fall through. Without this it silently uses env.
+      console.warn(`loadEffectiveAiConfig: ${key} exists but invalid (missing: ${missing.join(",")}) — falling through`);
+    } catch (e) {
+      console.error(`loadEffectiveAiConfig: kv.get(${key}) failed:`, e.message);
+    }
+    return null;
+  };
+
+  // 1) per-community override
+  if (chatId) {
+    const perCommunity = await tryConfig(`community:${chatId}:settings:ai`);
+    if (perCommunity) {
+      return {
+        provider: perCommunity.provider, apiUrl: perCommunity.apiUrl, apiKey: perCommunity.apiKey,
+        model: perCommunity.model, temperature: perCommunity.temperature,
+        referer: perCommunity.referer, title: perCommunity.title,
+        source: "kv:community",
+      };
+    }
+  }
+
+  // 2) global
+  const global_ = await tryConfig("settings:ai:global");
+  if (global_) {
+    return {
+      provider: global_.provider, apiUrl: global_.apiUrl, apiKey: global_.apiKey,
+      model: global_.model, temperature: global_.temperature,
+      referer: global_.referer, title: global_.title,
+      source: "kv:global",
+    };
+  }
+
+  // 3) env fallback
+  return { ...getAiConfigFromEnv(env), source: "env" };
 }
 
 // aiConfig: { provider, apiUrl, apiKey, model }
@@ -1283,23 +1498,28 @@ ${history}
   try {
     console.log("AI API запрос...", { provider, model, type, contentMode, hasApiKey: !!apiKey });
 
-    let response, text, _debugRaw;
+    let response, text, _debugRaw, _usage;
 
-    if (provider === "openai") {
-      // OpenAI-compatible (GLM, OpenAI, Groq, etc.)
+    if (provider === "openai" || provider === "openrouter") {
+      // OpenAI-compatible (OpenAI / OpenRouter / GLM / Groq / etc.)
+      const headers = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`,
+      };
+      if (provider === "openrouter") {
+        if (aiConfig.referer) headers["HTTP-Referer"] = aiConfig.referer;
+        if (aiConfig.title)   headers["X-Title"] = aiConfig.title;
+      }
       response = await fetch(apiUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
+        headers,
         body: JSON.stringify({
           model,
           messages: [
             { role: "system", content: "Ты — креативный директор русскоязычного арт-сообщества. Отвечай ТОЛЬКО на русском языке. Формат: валидный JSON массив строк на русском." },
             { role: "user", content: prompt },
           ],
-          temperature: 0.95,
+          temperature: typeof aiConfig.temperature === "number" ? aiConfig.temperature : 0.95,
         }),
       });
 
@@ -1313,6 +1533,18 @@ ${history}
       text = data.choices?.[0]?.message?.content || "";
       // Убираем markdown обёртку если есть
       text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+      // Capture usage for stats (OpenAI-compat shape)
+      if (data.usage) {
+        _usage = {
+          prompt_tokens: data.usage.prompt_tokens,
+          completion_tokens: data.usage.completion_tokens,
+          total_tokens: data.usage.total_tokens,
+          // OpenRouter sometimes returns cost in data.usage.cost or in data.usage.total_cost
+          cost_usd: typeof data.usage.cost === "number" ? data.usage.cost
+                  : typeof data.usage.total_cost === "number" ? data.usage.total_cost
+                  : null,
+        };
+      }
 
     } else {
       // Gemini (default)
@@ -1353,6 +1585,15 @@ ${history}
       for (const part of parts) {
         if (part.text && !part.thought) text = part.text;
       }
+      // Gemini usage
+      if (data.usageMetadata) {
+        _usage = {
+          prompt_tokens: data.usageMetadata.promptTokenCount,
+          completion_tokens: data.usageMetadata.candidatesTokenCount,
+          total_tokens: data.usageMetadata.totalTokenCount,
+          cost_usd: null, // Gemini free tier — no cost in response
+        };
+      }
     }
 
     console.log("AI API статус:", response.status);
@@ -1383,6 +1624,8 @@ ${history}
       typeof t === "string" ? t.trim() : (t.topic || t.theme || t.text || t.content || String(t))
     );
     console.log("AI темы:", validThemes);
+    // Attach usage as non-enumerable so existing code that treats themes as array still works.
+    Object.defineProperty(validThemes, "_usage", { value: _usage || null, enumerable: false });
     return validThemes;
 
   } catch (e) {
@@ -1426,7 +1669,8 @@ async function handleMessage(update, env, tg, storage) {
     // Commands (работают везде)
     if (command === "/start" || command === "/help") {
       const schedule = config ? await getSchedule(storage, chatId) : await getSchedule(storage);
-      await tg.sendHtml(chatId, ru.helpMessage(schedule), {
+      const msgOverride = await loadMessages(env.CHALLENGE_KV);
+      await tg.sendHtml(chatId, msgHelp(msgOverride, schedule), {
         message_thread_id: threadId || undefined,
       });
       return;
@@ -1983,15 +2227,15 @@ ${formatChallenge(monthly, "Месячный")}`;
       return;
     }
 
-    // Admin: Test Gemini API - тестирует боевой промпт для 6 тем
+    // Admin: Test AI - тестирует боевой промпт для 6 тем
     if (command === "/test_ai" && isAdmin) {
-      const aiCfg = getAiConfig(env);
-      await tg.sendHtml(chatId, `🔄 <i>Проверяю AI (${aiCfg.provider}/${aiCfg.model})...</i>`, { message_thread_id: threadId || undefined });
+      const aiCfg = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId);
+      await tg.sendHtml(chatId, `🔄 <i>Проверяю AI (${aiCfg.provider}/${aiCfg.model}, source: ${aiCfg.source})...</i>`, { message_thread_id: threadId || undefined });
       try {
         const contentMode = await storage.getContentMode(chatId);
         const themes = await generateThemes(aiCfg, "daily", "ru", [], contentMode);
 
-        let msg = `✅ <b>${aiCfg.provider}/${aiCfg.model}</b> (режим: <i>${contentMode}</i>)\n\n`;
+        let msg = `✅ <b>${aiCfg.provider}/${aiCfg.model}</b> (режим: <i>${contentMode}</i>, source: ${aiCfg.source})\n\n`;
         themes.forEach((theme, i) => {
           msg += `${i + 1}. ${theme}\n\n`;
         });
@@ -2065,7 +2309,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       }
 
       const medals = ["🥇", "🥈", "🥉"];
-      let msg = ru.leaderboardTitle(type) + `\n\n`;
+      let msg = msgLeaderboardTitle(await loadMessages(env.CHALLENGE_KV), type) + `\n\n`;
       leaderboard.slice(0, 10).forEach((e, i) => {
         const medal = medals[i] || `${i + 1}.`;
         const username = escapeHtml(e.username || `User ${e.userId}`);
@@ -2362,7 +2606,7 @@ ${escapeHtml(themeText)}
         if (result.reason === "limit") {
           await tg.sendHtml(
             chatId,
-            ru.submissionLimitReached(result.current, result.max),
+            msgSubmissionLimit(await loadMessages(env.CHALLENGE_KV), result.current, result.max),
             {
               message_thread_id: threadId || undefined,
               reply_to_message_id: message.message_id,
@@ -2374,7 +2618,7 @@ ${escapeHtml(themeText)}
       }
 
       // Confirmation message
-      await tg.sendHtml(chatId, ru.workAccepted(result.current, result.max), {
+      await tg.sendHtml(chatId, msgWorkAccepted(await loadMessages(env.CHALLENGE_KV), result.current, result.max), {
         message_thread_id: threadId || undefined,
         reply_to_message_id: message.message_id,
       });
@@ -2551,7 +2795,11 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     let aiThemes = [];
 
     if (aiThemeCount >= 2) {
-      aiThemes = await generateThemes(getAiConfig(env), type, "ru", previousThemes, contentMode);
+      aiThemes = await generateThemesLogged(
+        await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId),
+        type, "ru", previousThemes, contentMode,
+        env.CHALLENGE_KV, chatId,
+      );
       // Ограничиваем количество AI-тем
       aiThemes = aiThemes.slice(0, aiThemeCount);
     }
@@ -2575,7 +2823,7 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     // Отправляем poll напрямую (темы теперь короткие и влезают)
     const poll = await tg.sendPoll(
       chatId,
-      ru.pollQuestion(type),
+      msgPollQuestion(await loadMessages(env.CHALLENGE_KV)),
       pollOptions,
       {
         message_thread_id: topicId || undefined,
@@ -2633,9 +2881,10 @@ async function finishChallenge(env, chatId, config, tg, storage, type) {
     }
 
     const submissions = await storage.getSubmissions(chatId, type, challenge.id);
+    const msgOverride = await loadMessages(env.CHALLENGE_KV);
 
     if (submissions.length === 0) {
-      await tg.sendHtml(chatId, ru.noSubmissions, {
+      await tg.sendHtml(chatId, msgNoSubmissions(msgOverride), {
         message_thread_id: challenge.topicThreadId || undefined,
       });
     } else {
@@ -2665,7 +2914,7 @@ async function finishChallenge(env, chatId, config, tg, storage, type) {
 
       await tg.sendHtml(
         chatId,
-        ru.winnerAnnouncement(winnerNames, maxScore, type),
+        msgWinnerAnnouncement(msgOverride, winnerNames, maxScore),
         {
           message_thread_id: challenge.topicThreadId || undefined,
           reply_to_message_id: winners[0].messageId,
@@ -2689,7 +2938,7 @@ async function finishChallenge(env, chatId, config, tg, storage, type) {
               : `Участник #${winner.userId}`;
             await tg.sendHtml(
               chatId,
-              ru.winnerAnnouncementFull(winnerName, winner.score, type, challenge.topicFull || challenge.topic),
+              msgWinnerAnnouncementFull(msgOverride, winnerName, winner.score, challenge.topicFull || challenge.topic),
               {
                 message_thread_id: config.topics.winners,
               },
@@ -2802,7 +3051,7 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
     // Use full description in announcement with vote count
     const announcement = await tg.sendHtml(
       chatId,
-      ru.challengeAnnouncement(type, fullTheme, startDateStr, endDateStr, voteCount),
+      msgChallengeAnnouncement(await loadMessages(env.CHALLENGE_KV), type, fullTheme, startDateStr, endDateStr, voteCount),
       {
         message_thread_id: topicId || undefined,
       },
@@ -2844,44 +3093,83 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
   }
 }
 
-async function handleCronForCommunity(env, chatId, config, tg, storage, h, d, w, day, weekday) {
-  // Get schedule for this community
+async function handleCronForCommunity(env, chatId, config, tg, storage, h, m, d, w, day, weekday) {
+  // Per-community schedule with full independence between poll, finish, run times.
+  // All time fields accept HOUR + optional MINUTE (defaults to 0).
+  //
+  // Schedule shape (all fields optional; legacy fields without *Minute use 0):
+  //   daily:   { pollHour, pollMinute, challengeHour, challengeMinute }
+  //   weekly:  { pollDay, pollHour, pollMinute, challengeDay, challengeHour, challengeMinute }
+  //   monthly: { pollDay, pollHour, pollMinute, challengeDay, challengeHour, challengeMinute }
+  //
+  // pollDay (weekly): 0=Sun..6=Sat; pollDay (monthly): 1..28
+  // For cron to actually pick up minute granularity, set the worker cron to `* * * * *`.
   const schedule = await getSchedule(storage, chatId);
-  const pollHourBefore = 12; // Poll starts 12 hours before challenge
 
-  // Daily challenge
-  const dailyPollHour = (schedule.daily.challengeHour - pollHourBefore + 24) % 24;
-  if (h === dailyPollHour && day === "*" && weekday === "*") {
-    await generatePoll(env, chatId, config, tg, storage, "daily");
-  } else if (h === schedule.daily.challengeHour && day === "*" && weekday === "*") {
-    await startChallenge(env, chatId, config, tg, storage, "daily");
+  // helpers
+  const matchHM = (sH, sM, cH, cM) =>
+    typeof sH === "number" && h === sH && (cM ?? 0) === (typeof sM === "number" ? sM : 0);
+
+  // ── Daily ────────────────────────────────────────────────────────────────
+  const dailyPollHour = (typeof schedule.daily.pollHour === "number")
+    ? schedule.daily.pollHour
+    : (schedule.daily.challengeHour - 12 + 24) % 24;
+  const dailyPollMinute = schedule.daily.pollMinute ?? 0;
+  const dailyChallengeMinute = schedule.daily.challengeMinute ?? 0;
+  if (day === "*" && weekday === "*") {
+    if (h === dailyPollHour && m === dailyPollMinute) {
+      await generatePoll(env, chatId, config, tg, storage, "daily");
+    }
+    if (h === schedule.daily.challengeHour && m === dailyChallengeMinute) {
+      await startChallenge(env, chatId, config, tg, storage, "daily");
+    }
   }
 
-  // Weekly challenge
-  const weeklyPollDay = (schedule.weekly.challengeDay + 6) % 7; // Day before
-  if (h === schedule.weekly.pollHour && w === weeklyPollDay) {
+  // ── Weekly ───────────────────────────────────────────────────────────────
+  const weeklyPollDay = (typeof schedule.weekly.pollDay === "number")
+    ? schedule.weekly.pollDay
+    : (schedule.weekly.challengeDay + 6) % 7;
+  const weeklyPollMinute = schedule.weekly.pollMinute ?? 0;
+  const weeklyChallengeMinute = schedule.weekly.challengeMinute ?? 0;
+  if (h === schedule.weekly.pollHour && m === weeklyPollMinute && w === weeklyPollDay) {
     await generatePoll(env, chatId, config, tg, storage, "weekly");
-  } else if (h === schedule.weekly.challengeHour && w === schedule.weekly.challengeDay) {
+  }
+  if (h === schedule.weekly.challengeHour && m === weeklyChallengeMinute && w === schedule.weekly.challengeDay) {
     await startChallenge(env, chatId, config, tg, storage, "weekly");
   }
 
-  // Monthly challenge
-  const monthlyPollDay = schedule.monthly.challengeDay === 1 ? 28 : schedule.monthly.challengeDay - 3;
-  if (h === schedule.monthly.pollHour && d === monthlyPollDay) {
+  // ── Monthly ──────────────────────────────────────────────────────────────
+  const monthlyPollDay = (typeof schedule.monthly.pollDay === "number")
+    ? schedule.monthly.pollDay
+    : (schedule.monthly.challengeDay === 1 ? 28 : schedule.monthly.challengeDay - 3);
+  const monthlyPollMinute = schedule.monthly.pollMinute ?? 0;
+  const monthlyChallengeMinute = schedule.monthly.challengeMinute ?? 0;
+  if (h === schedule.monthly.pollHour && m === monthlyPollMinute && d === monthlyPollDay) {
     await generatePoll(env, chatId, config, tg, storage, "monthly");
-  } else if (h === schedule.monthly.challengeHour && d === schedule.monthly.challengeDay) {
+  }
+  if (h === schedule.monthly.challengeHour && m === monthlyChallengeMinute && d === schedule.monthly.challengeDay) {
     await startChallenge(env, chatId, config, tg, storage, "monthly");
   }
+  // suppress unused warning when day/weekday not consulted in monthly/weekly path
+  void weekday; void day;
 }
 
 async function handleCron(env, tg, storage, cron) {
   try {
-    const [, hour, day, weekday] = cron.split(" ");
-    const h = parseInt(hour, 10);
-    const d = parseInt(day, 10);
-    const w = parseInt(weekday, 10);
+    // Use the actual fire time (UTC), not the cron expression — schedules
+    // configured with minutes (e.g. 16:55) only match against the real minute
+    // when the cron itself fires every minute.
+    const now = new Date();
+    const m = now.getUTCMinutes();
+    const h = now.getUTCHours();
+    const d = now.getUTCDate();
+    const w = now.getUTCDay();
+    // Keep cron-string parsed bits for the legacy "*" detection on day/weekday
+    const parts = (cron || "").split(" ");
+    const day = parts[2] ?? "*";
+    const weekday = parts[4] ?? "*";
 
-    console.log(`Cron: ${cron}`);
+    console.log(`Cron fired: expr=${cron} actual=${now.toISOString()} h=${h} m=${m} d=${d} w=${w}`);
 
     // Get all active communities (returns array of config objects)
     const communityConfigs = await getAllActiveCommunities(env, storage);
@@ -2899,7 +3187,7 @@ async function handleCron(env, tg, storage, cron) {
         const chatId = config.chatId;
         if (!chatId) continue;
 
-        await handleCronForCommunity(env, chatId, config, tg, storage, h, d, w, day, weekday);
+        await handleCronForCommunity(env, chatId, config, tg, storage, h, m, d, w, day, weekday);
       } catch (e) {
         console.error(`Cron error for community ${config.chatId}:`, {
           error: e.message,
@@ -3288,6 +3576,16 @@ export default {
   },
 
   async scheduled(event, env) {
+    // Heartbeat — пишется ВСЕГДА, даже до прочих проверок, чтобы видно было что cron реально срабатывает
+    try {
+      const cur = (await env.CHALLENGE_KV.get("cron:last_run", "json")) || { runs: [] };
+      cur.last = { ts: Date.now(), cron: event.cron, scheduledTime: event.scheduledTime };
+      cur.runs = [cur.last, ...(cur.runs || [])].slice(0, 20);
+      await env.CHALLENGE_KV.put("cron:last_run", JSON.stringify(cur), { expirationTtl: 7 * 24 * 3600 });
+    } catch (e) {
+      console.error("cron heartbeat write failed:", e.message);
+    }
+
     try {
       if (!env.BOT_TOKEN) {
         console.error("Scheduled job skipped: missing BOT_TOKEN");
