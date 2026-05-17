@@ -208,29 +208,6 @@ npm run kv:restore     # обратная заливка из дампа
 - Деструктивные операции (DELETE global config, DELETE all suggestions) требуют `?confirm=YES_I_KNOW`
 - Append-only audit log пишет каждый mutate-запрос с IP/UA/method/path/status
 
-## Что нового в v0.2.0
-
-**Расписание**
-- Per-community schedule с **минутной точностью**: `pollHour/pollMinute/pollDay` и `challengeHour/challengeMinute/challengeDay` редактируются через UI (3 карточки Daily/Weekly/Monthly, два `HH:MM` поля внутри каждой). Бот сравнивает с UTC временем cron-tick'а до минуты, прежний хардкод `pollHourBefore = 12` убран.
-- Cron сменён на `* * * * *` чтобы ловить минутную точность; heartbeat пишется в `cron:last_run`.
-
-**AI / TOKENS**
-- Новая секция `00 TOKENS` на странице `AI Engine`: один раз сохранил OpenRouter / Gemini ключ — все presets и global этого провайдера подхватывают его автоматически. Авто-миграция при первом GET импортирует токены из существующих presets/global.
-- `TEST` кнопка для каждого токена (`/auth/key` для OpenRouter, `/models` для Gemini).
-- EDIT preset / global упрощён: только `Provider` + `Model`. `Name`, `API URL`, `API Key`, `Temperature` убраны — подставляются по дефолту по провайдеру, имя авто-генерится как `provider/model`.
-- **Grouped Model Select** для OpenRouter: 4 категории (🚀 Frontier · 💼 Standard · 💸 Budget · 🆓 Free), премиум сверху, в label цена `$prompt/$compl/M` и контекст (`128K` / `1M`). Поиск через все группы.
-- **Cost в USD** теперь показывается в AI Test и AI Stats для OpenRouter (раньше был `$0` потому что не просили `usage: { include: true }`).
-- AI Test пишет в Stats с `source: "admin-test"` — статистика для admin-кликов и для бот-вызовов в одном месте.
-- `temperature` не отправляется если не задана явно — модели GPT-5 / o1 / o3 / Gemini Pro 3 больше не валятся с «temperature not supported».
-
-**Prompts**
-- `COPY ALL` — копирует весь корпус режима в clipboard как `\n`-separated текст.
-- `BULK EDIT` — модалка с textarea, paste обратно → дубликаты и пустые строки убираются.
-
-**Дизайн**
-- Унифицированный `<PageHeader>` на всех 10 страницах: `CONTROL ROOM / NN / SECTION` crumb + serif заголовок + accent emphasis.
-- Новый brand mark: monogram «C» с прорезанной молнией, gradient violet → mint, тот же SVG в `<BrandMark>` и `favicon.svg`.
-
 ## Что НЕ сделано (TODO)
 
 - Notifications page (`Алерты`) — endpoint есть, бот должен начать туда писать после рефакторинга
