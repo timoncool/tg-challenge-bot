@@ -290,7 +290,7 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
 
 ```bash
 curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
-     "https://ваш-worker.workers.dev/admin/status?chat_id=-1001234567890"
+     "https://ваш-worker.workers.dev/admin/status?chat_id=<CHAT_ID>"
 ```
 
 **Создать опрос дневного челленджа:**
@@ -298,7 +298,7 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
 ```bash
 curl -X POST \
      -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
-     "https://ваш-worker.workers.dev/admin/poll/daily?chat_id=-1001234567890"
+     "https://ваш-worker.workers.dev/admin/poll/daily?chat_id=<CHAT_ID>"
 ```
 
 **Запустить челлендж (закрыть опрос):**
@@ -306,7 +306,7 @@ curl -X POST \
 ```bash
 curl -X POST \
      -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
-     "https://ваш-worker.workers.dev/admin/start/daily?chat_id=-1001234567890"
+     "https://ваш-worker.workers.dev/admin/start/daily?chat_id=<CHAT_ID>"
 ```
 
 **Завершить челлендж (подвести итоги):**
@@ -314,7 +314,7 @@ curl -X POST \
 ```bash
 curl -X POST \
      -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
-     "https://ваш-worker.workers.dev/admin/finish/daily?chat_id=-1001234567890"
+     "https://ваш-worker.workers.dev/admin/finish/daily?chat_id=<CHAT_ID>"
 ```
 
 **Получить информацию о сообществах:**
@@ -328,7 +328,7 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
 
 ```json
 {
-  "chatId": -1001234567890,
+  "chatId": <CHAT_ID>,
   "challenges": {
     "daily": {
       "theme": "Киберпанк-город",
