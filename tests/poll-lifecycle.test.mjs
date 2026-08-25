@@ -58,7 +58,8 @@ test("a poll created moments ago is not regenerated (double cron tick)", async (
   const worker = await loadWorker();
   const kv = new FakeKV();
   seedCommunity(kv);
-  const justNow = Date.UTC(2026, 7, 25, 5, 0, 3);
+  // Real clock, not the simulated tick: generatePoll ages polls with Date.now().
+  const justNow = Date.now() - 30_000;
   seedPoll(kv, { createdAt: justNow });
   stubTelegram({ options: POLL_OPTIONS });
 

@@ -813,6 +813,15 @@ class Storage {
     await this.delete(this._key(chatId, "poll", type));
   }
 
+  // Cron slots already fired for this community: { "poll:daily": <slot ms>, … }
+  async getCronState(chatId) {
+    return this.get(this._key(chatId, "cron_state"));
+  }
+
+  async setCronState(chatId, slots) {
+    await this.set(this._key(chatId, "cron_state"), slots);
+  }
+
   // Submissions (per-community) - with TTL for automatic cleanup
   async getSubmissions(chatId, type, challengeId) {
     return (await this.get(this._key(chatId, "submissions", type, challengeId))) || [];
@@ -2800,8 +2809,10 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
   try {
     const existing = await storage.getPoll(chatId, type);
     if (existing) {
+      // A negative age means createdAt is in the future — a corrupt record, not a
+      // fresh poll; treat it as stale rather than letting it block generation forever.
       const age = Date.now() - (existing.createdAt ?? 0);
-      if (age < POLL_FRESH_WINDOW_MS) return; // same tick fired twice — nothing to do
+      if (age >= 0 && age < POLL_FRESH_WINDOW_MS) return; // same tick fired twice — nothing to do
 
       // Leftover poll from an earlier cycle. Left in place it would block poll
       // generation forever and startChallenge would keep re-serving its options.
@@ -3200,7 +3211,66 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
   }
 }
 
-async function handleCronForCommunity(env, chatId, config, tg, storage, h, m, d, w, day, weekday) {
+// Cloudflare cron is best-effort: `scheduledTime` drifts inside the minute
+// (observed 02:06:16 and 02:23:58 on the same `* * * * *` trigger) and a tick
+// can be dropped entirely. Matching a slot with `h === H && m === M` therefore
+// loses a whole day's poll or challenge whenever its one minute is missed.
+// Instead each slot is resolved to its exact instant and fired once, late if
+// need be, within this window.
+const CRON_CATCHUP_MS = 55 * 60 * 1000;
+
+/** Most recent occurrence of a schedule slot at or before `now` (all UTC). */
+function lastSlotOccurrence(now, kind, { day, hour, minute }) {
+  const H = typeof hour === "number" ? hour : 0;
+  const M = typeof minute === "number" ? minute : 0;
+  const at = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), H, M, 0, 0));
+
+  if (kind === "daily") {
+    if (at.getTime() > now.getTime()) at.setUTCDate(at.getUTCDate() - 1);
+    return at.getTime();
+  }
+  if (kind === "weekly") {
+    at.setUTCDate(at.getUTCDate() - ((at.getUTCDay() - (day ?? 0) + 7) % 7));
+    if (at.getTime() > now.getTime()) at.setUTCDate(at.getUTCDate() - 7);
+    return at.getTime();
+  }
+  // monthly — day is 1..28
+  const dom = Math.min(Math.max(day ?? 1, 1), 28);
+  let month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), dom, H, M, 0, 0));
+  if (month.getTime() > now.getTime()) {
+    month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, dom, H, M, 0, 0));
+  }
+  return month.getTime();
+}
+
+/**
+ * Run `action` once per schedule slot.
+ * Doubles as an idempotency guard — Cloudflare can deliver the same minute twice,
+ * which used to start a challenge, immediately finish it and start another.
+ */
+async function runSlotOnce(storage, chatId, state, slotKey, occurrence, nowMs, action) {
+  if (nowMs < occurrence || nowMs - occurrence > CRON_CATCHUP_MS) return false;
+  if (state.slots[slotKey] === occurrence) return false;
+
+  if (state.bootstrap) {
+    // First tick after deploy: adopt whatever is already due instead of re-running
+    // it, otherwise a deploy shortly after a challenge start would restart it.
+    state.slots[slotKey] = occurrence;
+    state.dirty = true;
+    return false;
+  }
+
+  state.slots[slotKey] = occurrence;
+  state.dirty = true;
+  await storage.setCronState(chatId, state.slots); // claim the slot before acting
+  if (nowMs - occurrence > 90_000) {
+    console.warn(`cron catch-up: ${slotKey} for community=${chatId} ran ${Math.round((nowMs - occurrence) / 60000)}m late`);
+  }
+  await action();
+  return true;
+}
+
+async function handleCronForCommunity(env, chatId, config, tg, storage, now, h, m, d, w, day, weekday) {
   // Per-community schedule with full independence between poll, finish, run times.
   // All time fields accept HOUR + optional MINUTE (defaults to 0).
   //
@@ -3213,52 +3283,86 @@ async function handleCronForCommunity(env, chatId, config, tg, storage, h, m, d,
   // For cron to actually pick up minute granularity, set the worker cron to `* * * * *`.
   const schedule = await getSchedule(storage, chatId);
 
-  // helpers
-  const matchHM = (sH, sM, cH, cM) =>
-    typeof sH === "number" && h === sH && (cM ?? 0) === (typeof sM === "number" ? sM : 0);
+  const stored = await storage.getCronState(chatId);
+  const state = { slots: stored || {}, bootstrap: !stored, dirty: false };
 
-  // ── Daily ────────────────────────────────────────────────────────────────
-  const dailyPollHour = (typeof schedule.daily.pollHour === "number")
-    ? schedule.daily.pollHour
-    : (schedule.daily.challengeHour - 12 + 24) % 24;
-  const dailyPollMinute = schedule.daily.pollMinute ?? 0;
-  const dailyChallengeMinute = schedule.daily.challengeMinute ?? 0;
-  if (day === "*" && weekday === "*") {
-    if (h === dailyPollHour && m === dailyPollMinute) {
-      await generatePoll(env, chatId, config, tg, storage, "daily");
-    }
-    if (h === schedule.daily.challengeHour && m === dailyChallengeMinute) {
-      await startChallenge(env, chatId, config, tg, storage, "daily");
-    }
+  const slots = [
+    // ── Daily ──────────────────────────────────────────────────────────────
+    {
+      key: "poll:daily", kind: "daily",
+      at: {
+        hour: (typeof schedule.daily.pollHour === "number")
+          ? schedule.daily.pollHour
+          : (schedule.daily.challengeHour - 12 + 24) % 24,
+        minute: schedule.daily.pollMinute ?? 0,
+      },
+      run: () => generatePoll(env, chatId, config, tg, storage, "daily"),
+    },
+    {
+      key: "challenge:daily", kind: "daily",
+      at: { hour: schedule.daily.challengeHour, minute: schedule.daily.challengeMinute ?? 0 },
+      run: () => startChallenge(env, chatId, config, tg, storage, "daily"),
+    },
+    // ── Weekly ─────────────────────────────────────────────────────────────
+    {
+      key: "poll:weekly", kind: "weekly",
+      at: {
+        day: (typeof schedule.weekly.pollDay === "number")
+          ? schedule.weekly.pollDay
+          : (schedule.weekly.challengeDay + 6) % 7,
+        hour: schedule.weekly.pollHour,
+        minute: schedule.weekly.pollMinute ?? 0,
+      },
+      run: () => generatePoll(env, chatId, config, tg, storage, "weekly"),
+    },
+    {
+      key: "challenge:weekly", kind: "weekly",
+      at: {
+        day: schedule.weekly.challengeDay,
+        hour: schedule.weekly.challengeHour,
+        minute: schedule.weekly.challengeMinute ?? 0,
+      },
+      run: () => startChallenge(env, chatId, config, tg, storage, "weekly"),
+    },
+    // ── Monthly ────────────────────────────────────────────────────────────
+    {
+      key: "poll:monthly", kind: "monthly",
+      at: {
+        day: (typeof schedule.monthly.pollDay === "number")
+          ? schedule.monthly.pollDay
+          : (schedule.monthly.challengeDay === 1 ? 28 : schedule.monthly.challengeDay - 3),
+        hour: schedule.monthly.pollHour,
+        minute: schedule.monthly.pollMinute ?? 0,
+      },
+      run: () => generatePoll(env, chatId, config, tg, storage, "monthly"),
+    },
+    {
+      key: "challenge:monthly", kind: "monthly",
+      at: {
+        day: schedule.monthly.challengeDay,
+        hour: schedule.monthly.challengeHour,
+        minute: schedule.monthly.challengeMinute ?? 0,
+      },
+      run: () => startChallenge(env, chatId, config, tg, storage, "monthly"),
+    },
+  ];
+
+  const nowMs = now.getTime();
+
+  for (const slot of slots) {
+    if (typeof slot.at.hour !== "number") continue;
+    const occurrence = lastSlotOccurrence(now, slot.kind, slot.at);
+    await runSlotOnce(storage, chatId, state, slot.key, occurrence, nowMs, slot.run);
   }
 
-  // ── Weekly ───────────────────────────────────────────────────────────────
-  const weeklyPollDay = (typeof schedule.weekly.pollDay === "number")
-    ? schedule.weekly.pollDay
-    : (schedule.weekly.challengeDay + 6) % 7;
-  const weeklyPollMinute = schedule.weekly.pollMinute ?? 0;
-  const weeklyChallengeMinute = schedule.weekly.challengeMinute ?? 0;
-  if (h === schedule.weekly.pollHour && m === weeklyPollMinute && w === weeklyPollDay) {
-    await generatePoll(env, chatId, config, tg, storage, "weekly");
-  }
-  if (h === schedule.weekly.challengeHour && m === weeklyChallengeMinute && w === schedule.weekly.challengeDay) {
-    await startChallenge(env, chatId, config, tg, storage, "weekly");
-  }
+  // Always persist on the bootstrap tick, even with nothing due — otherwise the
+  // community stays in bootstrap mode and the next slot to come up gets adopted
+  // (i.e. silently skipped) instead of run.
+  if (state.dirty || state.bootstrap) await storage.setCronState(chatId, state.slots);
 
-  // ── Monthly ──────────────────────────────────────────────────────────────
-  const monthlyPollDay = (typeof schedule.monthly.pollDay === "number")
-    ? schedule.monthly.pollDay
-    : (schedule.monthly.challengeDay === 1 ? 28 : schedule.monthly.challengeDay - 3);
-  const monthlyPollMinute = schedule.monthly.pollMinute ?? 0;
-  const monthlyChallengeMinute = schedule.monthly.challengeMinute ?? 0;
-  if (h === schedule.monthly.pollHour && m === monthlyPollMinute && d === monthlyPollDay) {
-    await generatePoll(env, chatId, config, tg, storage, "monthly");
-  }
-  if (h === schedule.monthly.challengeHour && m === monthlyChallengeMinute && d === schedule.monthly.challengeDay) {
-    await startChallenge(env, chatId, config, tg, storage, "monthly");
-  }
-  // suppress unused warning when day/weekday not consulted in monthly/weekly path
-  void weekday; void day;
+  // day/weekday come from the cron expression and are no longer consulted —
+  // slots are resolved against real UTC time instead.
+  void weekday; void day; void w;
 }
 
 async function handleCron(env, tg, storage, cron, scheduledTime) {
@@ -3298,7 +3402,7 @@ async function handleCron(env, tg, storage, cron, scheduledTime) {
         const chatId = config.chatId;
         if (!chatId) continue;
 
-        await handleCronForCommunity(env, chatId, config, tg, storage, h, m, d, w, day, weekday);
+        await handleCronForCommunity(env, chatId, config, tg, storage, now, h, m, d, w, day, weekday);
       } catch (e) {
         console.error(`Cron error for community ${config.chatId}:`, {
           error: e.message,

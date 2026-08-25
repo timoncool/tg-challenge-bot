@@ -117,8 +117,12 @@ export function stubAi(themes) {
 
 export const CHAT = -1001749292934;
 
-/** KV pre-loaded with one community whose daily poll is at 05:00 and challenge at 14:00. */
-export function seedCommunity(kv, { schedule } = {}) {
+/**
+ * KV pre-loaded with one community whose daily poll is at 05:00 and challenge at 14:00.
+ * `bootstrap: true` leaves cron_state absent, i.e. the very first tick after a deploy.
+ */
+export function seedCommunity(kv, { schedule, bootstrap = false } = {}) {
+  if (!bootstrap) kv.seed(`community:${CHAT}:cron_state`, {});
   kv.seed("communities:list", { [String(CHAT)]: { chatId: CHAT, name: "TEST", addedAt: 1 } });
   kv.seed(`community:${CHAT}:settings:topics`, { daily: 4, weekly: 8, monthly: 6, winners: 999 });
   kv.seed(`community:${CHAT}:settings:schedule`, schedule ?? {
@@ -176,7 +180,11 @@ export function makeEnv(kv) {
 
 export const ctx = { waitUntil: (p) => p, passThroughOnException: () => {} };
 
-/** Fire a cron tick the way Cloudflare does — scheduledTime carries seconds. */
+/**
+ * Fire a cron tick the way Cloudflare does — scheduledTime carries seconds.
+ * Note: this only moves the *cron* clock. Code that calls Date.now() (poll ageing,
+ * challenge startedAt) still sees the real clock, so seed those relative to Date.now().
+ */
 export function tickAt(worker, env, { year = 2026, month = 7, day = 25, hour, minute = 0, second = 16 }) {
   const at = Date.UTC(year, month, day, hour, minute, second);
   return worker.scheduled({ cron: "* * * * *", scheduledTime: at }, env, ctx);
