@@ -692,6 +692,7 @@ const TTL = {
   SUGGESTIONS: 7 * 24 * 3600,       // 7 days
   ACTIVE_TOPICS: 31 * 24 * 3600,    // 31 days fallback
   POLLS: 7 * 24 * 3600,             // 7 days - polls are temporary, deleted after use
+  ALERTS: 90 * 24 * 3600,           // 90 days - bot alert log shown in the admin panel
   WEBHOOK_DEDUP: 3600,              // 1 hour
 };
 
@@ -2777,10 +2778,41 @@ async function handleReaction(update, env, storage) {
 // CRON JOBS
 // ============================================
 
+// A poll only ever lives for one cycle: it is created at pollHour and consumed
+// by startChallenge at challengeHour. So at the next poll moment any poll still
+// in KV is leftover — its delete was lost (KV is eventually consistent and a
+// delete can silently fail to stick). Anything younger than this window is from
+// the current tick (Cloudflare can fire the same minute twice) and is kept.
+const POLL_FRESH_WINDOW_MS = 10 * 60 * 1000;
+
+// Append to alerts:log, which the admin panel renders under "Алерты".
+async function logAlert(storage, severity, component, message, context = undefined) {
+  try {
+    const log = (await storage.get("alerts:log")) || [];
+    log.unshift({ ts: Date.now(), severity, component, message, context });
+    await storage.set("alerts:log", log.slice(0, 100), { expirationTtl: TTL.ALERTS });
+  } catch (e) {
+    console.error("logAlert failed:", e.message);
+  }
+}
+
 async function generatePoll(env, chatId, config, tg, storage, type) {
   try {
     const existing = await storage.getPoll(chatId, type);
-    if (existing) return;
+    if (existing) {
+      const age = Date.now() - (existing.createdAt ?? 0);
+      if (age < POLL_FRESH_WINDOW_MS) return; // same tick fired twice — nothing to do
+
+      // Leftover poll from an earlier cycle. Left in place it would block poll
+      // generation forever and startChallenge would keep re-serving its options.
+      console.warn(`generatePoll: dropping stale ${type} poll (age ${Math.round(age / 60000)}m), community=${chatId}`);
+      await logAlert(
+        storage, "warn", "generatePoll",
+        `Найден зависший ${type}-опрос (возраст ${Math.round(age / 3600000)} ч) — удалён, опрос пересоздан`,
+        { chatId, type, createdAt: existing.createdAt },
+      );
+      await storage.deletePoll(chatId, type);
+    }
 
     const topicId = config.topics[type];
     const previousThemes = await storage.getThemeHistory(chatId, type);
@@ -3026,15 +3058,32 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
         }
       } catch (e) {
         console.error("Poll stop error:", e);
-        // Fallback to first option (with safety check)
-        if (poll.options && poll.options.length > 0) {
+        // "already closed" means this poll was consumed by an earlier run and only
+        // survived because its delete was lost. Reusing options[0] here is what
+        // served the group the identical topic day after day — fall through to the
+        // emergency AI branch instead.
+        const alreadyClosed = /already\s+been\s+closed|poll\s+has\s+already/i.test(e.message || "");
+        if (alreadyClosed) {
+          console.warn(`startChallenge: ${type} poll was already closed — treating as consumed, community=${chatId}`);
+          await logAlert(
+            storage, "warn", "startChallenge",
+            `${type}-опрос уже был закрыт (зависший опрос) — тема взята у AI, опрос удалён`,
+            { chatId, type, pollCreatedAt: poll.createdAt },
+          );
+        } else if (poll.options && poll.options.length > 0) {
+          // Transient Telegram error — the poll is still a valid source of themes.
           const parsed = parseTheme(poll.options[0]);
           shortTheme = parsed.short;
           // Store the COMPLETE original string (title + description)
           fullTheme = poll.options[0];
         }
       }
+      // Retry once: a lost delete deadlocks the next poll generation until
+      // generatePoll notices the leftover and cleans it up.
       await storage.deletePoll(chatId, type);
+      if (await storage.getPoll(chatId, type)) {
+        await storage.deletePoll(chatId, type);
+      }
     }
 
     // EMERGENCY: poll отсутствовал ИЛИ Telegram отдал пустой winnerShort.
@@ -3212,12 +3261,16 @@ async function handleCronForCommunity(env, chatId, config, tg, storage, h, m, d,
   void weekday; void day;
 }
 
-async function handleCron(env, tg, storage, cron) {
+async function handleCron(env, tg, storage, cron, scheduledTime) {
   try {
-    // Use the actual fire time (UTC), not the cron expression — schedules
-    // configured with minutes (e.g. 16:55) only match against the real minute
-    // when the cron itself fires every minute.
-    const now = new Date();
+    // Use the SCHEDULED fire time (UTC), not actual — Cloudflare fires the cron
+    // handler ~1 second BEFORE the scheduled minute (see Dashboard cron events:
+    // "21:48:59" for the tick scheduled at 21:49). If we use new Date() then
+    // getUTCMinutes() returns scheduledMinute-1 and matching against
+    // schedule.challengeMinute = 0 silently fails for whole-hour schedules
+    // (h gets decremented through midnight too). event.scheduledTime is the
+    // exact ms timestamp CF intended to fire and matches the cron expression.
+    const now = scheduledTime ? new Date(scheduledTime) : new Date();
     const m = now.getUTCMinutes();
     const h = now.getUTCHours();
     const d = now.getUTCDate();
@@ -3692,8 +3745,11 @@ export default {
       const tg = new TelegramAPI(env.BOT_TOKEN);
       const storage = new Storage(env.CHALLENGE_KV);
 
-      // handleCron iterates over all registered communities
-      await handleCron(env, tg, storage, event.cron);
+      // handleCron iterates over all registered communities.
+      // Pass event.scheduledTime — actual `Date.now()` is HH:MM-1s drifted
+      // (CF cron fires ~1s before scheduled minute) which makes match against
+      // schedule.challengeMinute = 0 silently fail (h becomes HH-1, m becomes 59).
+      await handleCron(env, tg, storage, event.cron, event.scheduledTime);
     } catch (e) {
       console.error("Scheduled job error:", {
         error: e.message,
