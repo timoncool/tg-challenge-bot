@@ -94,7 +94,7 @@ export function DashboardPage() {
           title="Что у тебя сейчас в эфире"
           emphasis="в эфире"
           subtitle={q.data
-            ? `${new Date(q.data.serverTime).toLocaleString("ru-RU")} · UTC · обновляется каждые 30с`
+            ? `${new Date(q.data.serverTime).toLocaleString("ru-RU", { timeZone: "UTC" })} · UTC · обновляется каждые 30с`
             : "загрузка…"}
         />
         <Group gap="xs">

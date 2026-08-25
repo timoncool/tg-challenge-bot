@@ -38,7 +38,7 @@ export const onRequestGet: PagesFunction<BotEnv> = async (ctx) => {
   const err = checkCreds(ctx.env);
   if (err) return json({ error: err }, { status: 503 });
 
-  const worker = ctx.env.BOT_WORKER_NAME ?? "tg-challenge-bot";
+  const worker = new URL(ctx.request.url).searchParams.get("worker") || ctx.env.BOT_WORKER_NAME || "tg-challenge-bot";
   const url = `${BASE}/accounts/${ctx.env.CF_ACCOUNT_ID}/workers/scripts/${worker}/schedules`;
   const r = await fetch(url, { headers: cfHeaders(ctx.env) });
   const j = (await r.json()) as { success: boolean; result?: { schedules?: { cron: string; created_on?: string; modified_on?: string }[] }; errors?: unknown };
@@ -76,7 +76,7 @@ export const onRequestPut: PagesFunction<BotEnv> = async (ctx) => {
     }
   }
 
-  const worker = ctx.env.BOT_WORKER_NAME ?? "tg-challenge-bot";
+  const worker = new URL(ctx.request.url).searchParams.get("worker") || ctx.env.BOT_WORKER_NAME || "tg-challenge-bot";
   const url = `${BASE}/accounts/${ctx.env.CF_ACCOUNT_ID}/workers/scripts/${worker}/schedules`;
   const r = await fetch(url, {
     method: "PUT",

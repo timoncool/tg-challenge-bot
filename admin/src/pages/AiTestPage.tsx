@@ -112,8 +112,13 @@ export function AiTestPage() {
       const body: Record<string, unknown> = { type, modes };
       if (useGlobal) {
         body.useGlobal = true;
+        // override model / temperature если юзер их поменял в UI
+        if (model) body.modelOverride = model;
+        if (typeof temperature === "number") body.temperatureOverride = temperature;
       } else if (presetId) {
         body.usePresetId = presetId;
+        if (model) body.modelOverride = model;
+        if (typeof temperature === "number") body.temperatureOverride = temperature;
       } else {
         body.config = {
           provider, apiUrl, apiKey, model, temperature,

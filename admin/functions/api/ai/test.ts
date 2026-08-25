@@ -39,6 +39,10 @@ interface TestReq {
   usePresetId?: string;       // pull a specific preset from settings:ai:presets
   type?: "daily" | "weekly" | "monthly";
   modes?: ("vanilla" | "medium" | "nsfw")[];
+  // Overrides когда выбран preset/global, но юзер на странице сменил модель
+  // или температуру через Select/Slider — должны применяться поверх saved config.
+  modelOverride?: string;
+  temperatureOverride?: number;
 }
 
 async function callAi(cfg: AiConfigInput, prompt: string): Promise<{ text: string; usage?: unknown; raw?: unknown }> {
@@ -195,6 +199,11 @@ export const onRequestPost: PagesFunction<Env> = async (ctx) => {
       return json({ error: `apiKey не задан. Сохрани токен для ${cfg.provider} в секции TOKENS на /ai-engine` }, { status: 400 });
     }
   }
+
+  // Применяем overrides — позволяет на странице AI Test выбрать другую модель
+  // или температуру поверх сохранённого preset/global без пересохранения.
+  if (body.modelOverride && body.modelOverride.trim()) cfg.model = body.modelOverride.trim();
+  if (typeof body.temperatureOverride === "number") cfg.temperature = body.temperatureOverride;
 
   const type = body.type ?? "daily";
   const modes = body.modes ?? ["vanilla", "medium", "nsfw"];
