@@ -115,6 +115,20 @@ export function stubAi(themes) {
   };
 }
 
+/** AI stub that fails the way OpenRouter fails when credits run out. */
+export function stubAiFailing(status = 402, message = "This request requires more credits") {
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).includes("api.telegram.org")) {
+      return new Response(JSON.stringify({ error: { message, code: status } }), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return inner(url, init);
+  };
+}
+
 export const CHAT = -1001749292934;
 
 /**

@@ -1529,6 +1529,10 @@ ${history}
       };
       // Forward temperature только если задан явно — модели GPT-5/o3/Gemini Pro могут rejectать дефолт.
       if (typeof aiConfig.temperature === "number") reqBody.temperature = aiConfig.temperature;
+      // Без явного лимита OpenRouter резервирует под max_completion_tokens модели
+      // (у gemini-flash это 65536) и отдаёт 402 «requires more credits», хотя ответ
+      // на 6 тем — пара сотен токенов. 2000 с большим запасом.
+      reqBody.max_tokens = aiConfig.maxTokens ?? 2000;
       // OpenRouter returns usage.cost (USD) only when explicitly asked.
       // Without this flag stats show $0 even though the call was billable.
       if (provider === "openrouter") reqBody.usage = { include: true };
@@ -2812,7 +2816,7 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
       // A negative age means createdAt is in the future — a corrupt record, not a
       // fresh poll; treat it as stale rather than letting it block generation forever.
       const age = Date.now() - (existing.createdAt ?? 0);
-      if (age >= 0 && age < POLL_FRESH_WINDOW_MS) return; // same tick fired twice — nothing to do
+      if (age >= 0 && age < POLL_FRESH_WINDOW_MS) return true; // same tick fired twice — nothing to do
 
       // Leftover poll from an earlier cycle. Left in place it would block poll
       // generation forever and startChallenge would keep re-serving its options.
@@ -2865,7 +2869,7 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     // Validate: need at least 2 options for poll
     if (pollOptions.length < 2) {
       console.error(`generatePoll: not enough themes for ${type}, community=${chatId}`);
-      return;
+      return false;
     }
 
     // Отправляем poll напрямую (темы теперь короткие и влезают)
@@ -2906,11 +2910,13 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
     await storage.clearSuggestions(chatId, type);
 
     console.log(`Poll created: community=${chatId}, type=${type}, userSuggestions=${suggestionThemes.length}, aiThemes=${aiThemes.length}`);
+    return true;
   } catch (e) {
     console.error(`generatePoll error (${type}):`, {
       error: e.message,
       stack: e.stack,
     });
+    return false;
   }
 }
 
@@ -3147,7 +3153,7 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
       if (Number.isFinite(ownerChatId)) {
         try { await tg.sendHtml(ownerChatId, errMsg); } catch {}
       }
-      return; // выход без создания challenge
+      return false; // выход без создания challenge
     }
 
     const topicId = config.topics[type];
@@ -3203,11 +3209,13 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
     await storage.addThemeToHistory(chatId, type, shortTheme);
 
     console.log(`Challenge started: community=${chatId}, ${type} #${challengeId} - "${shortTheme}" (${voteCount} votes)`);
+    return true;
   } catch (e) {
     console.error(`startChallenge error (${type}):`, {
       error: e.message,
       stack: e.stack,
     });
+    return false;
   }
 }
 
@@ -3218,6 +3226,46 @@ async function startChallenge(env, chatId, config, tg, storage, type) {
 // Instead each slot is resolved to its exact instant and fired once, late if
 // need be, within this window.
 const CRON_CATCHUP_MS = 55 * 60 * 1000;
+
+// A slot whose action failed (AI provider down, Telegram refusing, …) must not
+// count as done — on 2026-08-29 OpenRouter ran out of credits and all three
+// groups silently went a whole day with no challenge. Keep retrying inside this
+// window, spaced out so a dead provider is not hammered every minute.
+const CRON_RETRY_MS = 6 * 3600 * 1000;
+const CRON_RETRY_INTERVAL_MS = 10 * 60 * 1000;
+
+/** Telegram DM for the owner: KV overrides env so it can be set without a redeploy. */
+async function getOwnerChatId(env, storage) {
+  try {
+    const fromKv = await storage.get("settings:owner_chat_id");
+    const id = parseInt(fromKv ?? env.OWNER_CHAT_ID, 10);
+    return Number.isFinite(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+// Человекочитаемые названия слотов — в личку не должен прилетать "poll:weekly".
+const SLOT_LABELS = {
+  "poll:daily": "дневной опрос",
+  "poll:weekly": "недельный опрос",
+  "poll:monthly": "месячный опрос",
+  "challenge:daily": "дневной челлендж",
+  "challenge:weekly": "недельный челлендж",
+  "challenge:monthly": "месячный челлендж",
+};
+
+/** Alert log + DM to the owner. Never throws — reporting must not break the run. */
+async function reportFailure(env, tg, storage, component, message, context) {
+  await logAlert(storage, "error", component, message, context);
+  const owner = await getOwnerChatId(env, storage);
+  if (owner === null) return;
+  try {
+    await tg.sendHtml(owner, `❗ <b>Челлендж-бот</b>\n${message}`);
+  } catch (e) {
+    console.error("reportFailure: не смог написать владельцу:", e.message);
+  }
+}
 
 /** Most recent occurrence of a schedule slot at or before `now` (all UTC). */
 function lastSlotOccurrence(now, kind, { day, hour, minute }) {
@@ -3248,9 +3296,21 @@ function lastSlotOccurrence(now, kind, { day, hour, minute }) {
  * Doubles as an idempotency guard — Cloudflare can deliver the same minute twice,
  * which used to start a challenge, immediately finish it and start another.
  */
-async function runSlotOnce(storage, chatId, state, slotKey, occurrence, nowMs, action) {
-  if (nowMs < occurrence || nowMs - occurrence > CRON_CATCHUP_MS) return false;
-  if (state.slots[slotKey] === occurrence) return false;
+async function runSlotOnce(env, tg, storage, chatId, state, slotKey, occurrence, nowMs, action) {
+  if (nowMs < occurrence) return false;
+  if (state.slots[slotKey] === occurrence) return false; // already done for this cycle
+
+  const failKey = `${slotKey}!`;
+  const failed = state.slots[failKey];
+  const retrying = failed && failed.at === occurrence;
+  const lateBy = nowMs - occurrence;
+
+  if (retrying) {
+    if (lateBy > CRON_RETRY_MS) return false;                                // gave up on this cycle
+    if (nowMs - (failed.last ?? 0) < CRON_RETRY_INTERVAL_MS) return false;   // too soon to retry
+  } else if (lateBy > CRON_CATCHUP_MS) {
+    return false; // slot missed by too much and never attempted — skip to next cycle
+  }
 
   if (state.bootstrap) {
     // First tick after deploy: adopt whatever is already due instead of re-running
@@ -3260,14 +3320,38 @@ async function runSlotOnce(storage, chatId, state, slotKey, occurrence, nowMs, a
     return false;
   }
 
-  state.slots[slotKey] = occurrence;
+  // Record the attempt BEFORE acting: the same minute can be delivered twice and
+  // must not run the action twice. Success promotes it to a completed slot below.
+  state.slots[failKey] = { at: occurrence, tries: (failed?.tries ?? 0) + 1, last: nowMs };
   state.dirty = true;
-  await storage.setCronState(chatId, state.slots); // claim the slot before acting
-  if (nowMs - occurrence > 90_000) {
-    console.warn(`cron catch-up: ${slotKey} for community=${chatId} ran ${Math.round((nowMs - occurrence) / 60000)}m late`);
+  await storage.setCronState(chatId, state.slots);
+
+  if (lateBy > 90_000) {
+    console.warn(`cron: ${slotKey} for community=${chatId} ran ${Math.round(lateBy / 60000)}m late (попытка ${state.slots[failKey].tries})`);
   }
-  await action();
-  return true;
+
+  const ok = await action();
+
+  if (ok !== false) {
+    state.slots[slotKey] = occurrence;
+    delete state.slots[failKey];
+  } else {
+    const tries = state.slots[failKey].tries;
+    const giveUp = lateBy + CRON_RETRY_INTERVAL_MS > CRON_RETRY_MS;
+    const what = SLOT_LABELS[slotKey] || slotKey;
+    const where = state.communityName ? `«${state.communityName}»` : `чат ${chatId}`;
+    await reportFailure(
+      env, tg, storage, slotKey,
+      giveUp
+        ? `Не удалось запустить ${what} — ${where}.
+Попыток: ${tries}, все неудачные. Цикл пропущен, нужна проверка.`
+        : `Не удалось запустить ${what} — ${where}.
+Попытка ${tries}, повтор через 10 минут.`,
+      { chatId, community: state.communityName, slot: slotKey, occurrence, tries },
+    );
+  }
+  state.dirty = true;
+  return ok !== false;
 }
 
 async function handleCronForCommunity(env, chatId, config, tg, storage, now, h, m, d, w, day, weekday) {
@@ -3284,7 +3368,7 @@ async function handleCronForCommunity(env, chatId, config, tg, storage, now, h, 
   const schedule = await getSchedule(storage, chatId);
 
   const stored = await storage.getCronState(chatId);
-  const state = { slots: stored || {}, bootstrap: !stored, dirty: false };
+  const state = { slots: stored || {}, bootstrap: !stored, dirty: false, communityName: config?.name || null };
 
   const slots = [
     // ── Daily ──────────────────────────────────────────────────────────────
@@ -3352,7 +3436,7 @@ async function handleCronForCommunity(env, chatId, config, tg, storage, now, h, 
   for (const slot of slots) {
     if (typeof slot.at.hour !== "number") continue;
     const occurrence = lastSlotOccurrence(now, slot.kind, slot.at);
-    await runSlotOnce(storage, chatId, state, slot.key, occurrence, nowMs, slot.run);
+    await runSlotOnce(env, tg, storage, chatId, state, slot.key, occurrence, nowMs, slot.run);
   }
 
   // Always persist on the bootstrap tick, even with nothing due — otherwise the
