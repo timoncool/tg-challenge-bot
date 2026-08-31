@@ -1529,12 +1529,11 @@ ${history}
       };
       // Forward temperature только если задан явно — модели GPT-5/o3/Gemini Pro могут rejectать дефолт.
       if (typeof aiConfig.temperature === "number") reqBody.temperature = aiConfig.temperature;
-      // Без явного лимита OpenRouter резервирует под max_completion_tokens модели
-      // (у gemini-flash это 65536) и отдаёт 402 «requires more credits» даже при
-      // живом балансе. Но лимит должен быть с запасом: gemini-flash — thinking-модель,
-      // рассуждения идут в completion, наблюдался разброс 423..2159 токенов на ответ.
-      // На 2000 самые длинные ответы обрывались на середине JSON (31.08, ArtGeneration).
-      reqBody.max_tokens = aiConfig.maxTokens ?? 8000;
+      // Замер по успешным вызовам: 423..2159 completion-токенов (gemini-flash —
+      // thinking-модель, рассуждения идут туда же). 32000 — пятнадцатикратный
+      // запас от наблюдаемого максимума, обрезать ответ нечему.
+      // Лимит 2000, поставленный 29.08 «на глаз», резал длинные ответы — не повторять.
+      reqBody.max_tokens = aiConfig.maxTokens ?? 32000;
       // OpenRouter returns usage.cost (USD) only when explicitly asked.
       // Without this flag stats show $0 even though the call was billable.
       if (provider === "openrouter") reqBody.usage = { include: true };
