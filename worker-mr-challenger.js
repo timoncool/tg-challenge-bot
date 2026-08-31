@@ -1530,10 +1530,10 @@ ${history}
       // Forward temperature только если задан явно — модели GPT-5/o3/Gemini Pro могут rejectать дефолт.
       if (typeof aiConfig.temperature === "number") reqBody.temperature = aiConfig.temperature;
       // Замер по успешным вызовам: 423..2159 completion-токенов (gemini-flash —
-      // thinking-модель, рассуждения идут туда же). 32000 — пятнадцатикратный
-      // запас от наблюдаемого максимума, обрезать ответ нечему.
-      // Лимит 2000, поставленный 29.08 «на глаз», резал длинные ответы — не повторять.
-      reqBody.max_tokens = aiConfig.maxTokens ?? 32000;
+      // thinking-модель, рассуждения идут туда же). 5000 — двойной запас от
+      // наблюдаемого максимума. Лимит 2000, поставленный 29.08 «на глаз», резал
+      // длинные ответы на середине JSON — ниже этой планки не опускать.
+      reqBody.max_tokens = aiConfig.maxTokens ?? 5000;
       // OpenRouter returns usage.cost (USD) only when explicitly asked.
       // Without this flag stats show $0 even though the call was billable.
       if (provider === "openrouter") reqBody.usage = { include: true };
