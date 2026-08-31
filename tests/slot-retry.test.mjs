@@ -157,3 +157,33 @@ test("no owner configured — failure is still logged, nothing crashes", async (
 
   assert.ok((kv.json("alerts:log") || []).length > 0);
 });
+
+test("a truncated AI answer counts as a failure and is retried", async () => {
+  // 31.08: max_tokens was too low for a thinking model, the JSON array came back
+  // cut in half and JSON.parse threw. That must behave like any other failure.
+  const worker = await loadWorker();
+  const kv = new FakeKV();
+  const env = makeEnv(kv);
+  seedCommunity(kv);
+
+  stubTelegram({ options: POLL_OPTIONS });
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).includes("api.telegram.org")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '[\n  "Питер Пэн",\n  "Кормление карпов кои в тихо' } }],
+        usage: { prompt_tokens: 600, completion_tokens: 2000, total_tokens: 2600 },
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+    return inner(url, init);
+  };
+
+  await tickAt(worker, env, { hour: 5 });
+  assert.equal(kv.has(pollKey), false, "a cut-off answer must not produce a poll");
+  assert.notEqual(kv.json(stateKey)["poll:daily"], Date.UTC(2026, 7, 25, 5, 0));
+
+  stubTelegram({ options: POLL_OPTIONS });
+  stubAi(sixThemes("Полный ответ"));
+  await tickAt(worker, env, { hour: 5, minute: 15 });
+  assert.equal(kv.json(pollKey)?.options?.[0], "Полный ответ 1", "the retry must recover it");
+});
