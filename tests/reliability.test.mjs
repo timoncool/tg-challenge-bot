@@ -69,6 +69,24 @@ test("a result that cannot be recorded keeps the old challenge instead of overwr
   assert.ok(kv.json(key("cron_state"))["challenge:daily!"], "the slot retries");
 });
 
+test("votes are not replaced by a guess when Telegram is briefly down", async () => {
+  const worker = await loadWorker();
+  const kv = new FakeKV();
+  const env = makeEnv(kv);
+  seedCommunity(kv);
+  seedActiveChallenge(kv, { startedAt: YESTERDAY_14 });
+  seedPoll(kv, { createdAt: Date.now() - 3600_000 });
+  stubTelegram({ options: POLL_OPTIONS, telegramDown: true });
+
+  await tickAt(worker, env, { hour: 14 });
+  assert.ok(kv.has(key("poll", "daily")), "the poll is kept for the retry");
+  assert.ok(kv.json(key("cron_state"))["challenge:daily!"], "the slot retries");
+
+  stubTelegram({ options: POLL_OPTIONS, voterCounts: [0, 0, 5, 0, 0, 0] });
+  await tickAt(worker, env, { hour: 14, minute: 15 });
+  assert.equal(kv.json(key("challenge", "daily")).topic, POLL_OPTIONS[2], "the voted theme wins");
+});
+
 // ── The owner learns why ───────────────────────────────────────────────────
 
 test("the failure DM names the cause", async () => {

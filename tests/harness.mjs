@@ -66,6 +66,7 @@ export class FakeKV {
  * opts.webhookInfo → what getWebhookInfo returns.
  * opts.botUsername → the username getMe returns.
  * opts.rejectSend → predicate on a sendMessage body; matching messages fail with 400.
+ * opts.telegramDown → stopPoll fails with a server error.
  */
 export function stubTelegram(opts = {}) {
   const calls = [];
@@ -92,6 +93,7 @@ export function stubTelegram(opts = {}) {
     }
     if (method === "stopPoll") {
       if (opts.pollClosed) return fail(400, "Bad Request: poll has already been closed");
+      if (opts.telegramDown) return fail(502, "Bad Gateway");
       return ok({
         id: String(body.message_id),
         is_closed: true,

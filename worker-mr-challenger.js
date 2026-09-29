@@ -58,16 +58,11 @@ function stripHtml(text) {
 }
 
 // ============================================
-// ЛОКАЛИЗАЦИЯ
-// ============================================
-
-// ============================================
 // MESSAGES OVERRIDE (settings:messages KV) — управляется из админки
 // ============================================
-// Кеш на инстанс воркера (живёт ~1 invocation, чем меньше — тем чаще читаем KV).
+// Cached per isolate for 60 s: an edit in the admin panel reaches the chat within a minute.
 let __MSG_CACHE = { at: 0, data: null };
 async function loadMessages(kv) {
-  // 60s in-memory cache to avoid KV read on every reaction handler
   if (__MSG_CACHE.data && Date.now() - __MSG_CACHE.at < 60_000) return __MSG_CACHE.data;
   try {
     const o = (await kv.get("settings:messages", "json")) || {};
@@ -2230,12 +2225,14 @@ ${formatChallenge(monthly, "Месячный")}`;
     // Admin: Test AI - тестирует боевой промпт для 6 тем
     if (command === "/test_ai" && await isAdmin()) {
       const aiCfg = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId);
-      await tg.sendHtml(chatId, `🔄 <i>Проверяю AI (${aiCfg.provider}/${aiCfg.model}, source: ${aiCfg.source})...</i>`, { message_thread_id: threadId || undefined });
+      const engine = escapeHtml(`${aiCfg.provider}/${aiCfg.model}`);
+      const source = escapeHtml(aiCfg.source);
+      await tg.sendHtml(chatId, `🔄 <i>Проверяю AI (${engine}, source: ${source})...</i>`, { message_thread_id: threadId || undefined });
       try {
         const contentMode = await storage.getContentMode(chatId);
         const themes = await generateThemes(aiCfg, "daily", [], contentMode, await loadPromptOverrides(env.CHALLENGE_KV));
 
-        let msg = `✅ <b>${aiCfg.provider}/${aiCfg.model}</b> (режим: <i>${contentMode}</i>, source: ${aiCfg.source})\n\n`;
+        let msg = `✅ <b>${engine}</b> (режим: <i>${escapeHtml(contentMode)}</i>, source: ${source})\n\n`;
         themes.forEach((theme, i) => {
           msg += `${i + 1}. ${escapeHtml(theme)}\n\n`;
         });
@@ -3063,15 +3060,24 @@ async function takePollWinner(tg, storage, chatId, type, poll) {
     }
   } catch (e) {
     console.error("Poll stop error:", e.message);
+    // Network and server errors: keep the poll, the slot retries and reads the votes then.
+    if (!e.message?.startsWith("[4")) throw e;
+    const pollLabel = SLOT_LABELS[`poll:${type}`];
     // "already closed" = consumed by an earlier run whose delete was lost: its options are spent.
-    if (/already\s+been\s+closed|poll\s+has\s+already/i.test(e.message || "")) {
+    if (/already\s+been\s+closed|poll\s+has\s+already/i.test(e.message)) {
       await logAlert(
         storage, "warn", "startChallenge",
-        `${type}-опрос уже был закрыт (зависший опрос) — тема взята у AI, опрос удалён`,
+        `${pollLabel} уже был закрыт (зависший опрос) — тема взята у AI, опрос удалён`,
         { chatId, type, pollCreatedAt: poll.createdAt },
       );
     } else if (poll.options?.length) {
+      // Telegram refuses for good (message deleted, rights lost): the votes are unreadable.
       theme = { short: parseTheme(poll.options[0]).short, full: poll.options[0] };
+      await logAlert(
+        storage, "warn", "startChallenge",
+        `${pollLabel}: голоса не прочитать (${e.message}) — взята первая тема опроса`,
+        { chatId, type, messageId: poll.messageId },
+      );
     }
   }
   try {
