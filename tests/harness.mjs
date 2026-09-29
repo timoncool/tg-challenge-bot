@@ -21,6 +21,7 @@ export async function loadWorker() {
 export class FakeKV {
   constructor() {
     this.map = new Map();
+    this.ttls = new Map();
     this.deleteCalls = [];
     /** Set a key name here to simulate a KV delete that silently does not stick. */
     this.swallowDeleteFor = null;
@@ -32,9 +33,14 @@ export class FakeKV {
     if (raw === undefined) return null;
     return type === "json" ? JSON.parse(raw) : raw;
   }
-  async put(key, value) {
+  async put(key, value, options = {}) {
     if (this.failPutFor === key) throw new Error(`KV put failed for ${key}`);
     this.map.set(key, value);
+    this.ttls.set(key, options.expirationTtl ?? null);
+  }
+  /** expirationTtl of the last write, in seconds; null = kept forever. */
+  ttl(key) {
+    return this.ttls.get(key);
   }
   async delete(key) {
     this.deleteCalls.push(key);

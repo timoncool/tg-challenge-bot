@@ -120,6 +120,45 @@ test("a community name with & does not break the owner DM", async () => {
   assert.match(dm.body.text, /«Art &amp; &lt;Code&gt;»/);
 });
 
+// ── Records live as long as they are needed ───────────────────────────────
+
+test("a monthly poll and its suggestions outlive the wait for the monthly start", async () => {
+  // Production: poll on the 16th/17th, challenge on the 23rd/24th — more than 7 days later.
+  const worker = await loadWorker();
+  const kv = new FakeKV();
+  seedCommunity(kv);
+  stubTelegram({ options: POLL_OPTIONS });
+  stubAi(sixThemes("Месячная"));
+
+  await tickAt(worker, makeEnv(kv), { day: 16, hour: 9 });
+
+  const month = 31 * 24 * 3600;
+  assert.ok(kv.ttl(key("poll", "monthly")) >= month, `poll ttl ${kv.ttl(key("poll", "monthly"))}s`);
+  assert.ok(kv.ttl(key("poll_votes", "monthly")) >= month);
+  const pollId = kv.json(key("poll", "monthly")).pollId;
+  assert.ok(kv.ttl(`poll_index:${pollId}`) >= month);
+
+  await sendUpdate(worker, makeEnv(kv), groupMessage({ text: "/suggest_monthly Лунный маяк" }));
+  assert.ok(kv.ttl(key("suggestions", "monthly")) >= month, "suggestions gather for a whole month");
+});
+
+test("a start without a poll is reported, not silently given an AI theme", async () => {
+  const worker = await loadWorker();
+  const kv = new FakeKV();
+  seedCommunity(kv);
+  seedActiveChallenge(kv, { startedAt: YESTERDAY_14 });
+  stubTelegram({ options: POLL_OPTIONS });
+  stubAi(sixThemes("AI-тема"));
+
+  await tickAt(worker, makeEnv(kv), { hour: 14 });
+
+  assert.equal(kv.json(key("challenge", "daily")).topic, "AI-тема 1");
+  assert.ok(
+    kv.json("alerts:log").some((a) => a.severity === "warn" && /опроса нет/.test(a.message)),
+    "the missing poll is in the alerts",
+  );
+});
+
 // ── Admin actions are respected ────────────────────────────────────────────
 
 test("an extended challenge is not cut short by its start slot", async () => {

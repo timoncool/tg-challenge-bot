@@ -3,6 +3,8 @@ import { AdminStorage, ChallengeType } from "../../../_lib/storage";
 import { requireCommunity, isGuardErr } from "../../../_lib/guards";
 
 const isValidType = (t: string): t is ChallengeType => ["daily","weekly","monthly"].includes(t);
+// Same as the bot's TTL.SUGGESTIONS: suggestions gather for a whole monthly cycle.
+const SUGGESTIONS_TTL = 45 * 24 * 3600;
 
 // GET    /api/communities/{chatId}/suggestions?type=daily|all
 // DELETE /api/communities/{chatId}/suggestions?type=daily
@@ -52,7 +54,7 @@ export const onRequestDelete: PagesFunction<Env> = async (ctx) => {
     const s = new AdminStorage(kv);
     const list = await s.getSuggestions(chatId, t as ChallengeType);
     const next = list.filter((x) => x.id !== id);
-    await kv.put(`community:${chatId}:suggestions:${t}`, JSON.stringify(next), { expirationTtl: 7 * 24 * 3600 });
+    await kv.put(`community:${chatId}:suggestions:${t}`, JSON.stringify(next), { expirationTtl: SUGGESTIONS_TTL });
     return json({ ok: true, removed: list.length - next.length });
   }
 
@@ -99,7 +101,7 @@ export const onRequestPatch: PagesFunction<Env> = async (ctx) => {
     sug.reactions = sug.reactions || {};
     for (let i = 0; i < min; i++) sug.reactions[`__admin_force_${i}`] = 1;
     sug.reactionCount = Object.keys(sug.reactions).length;
-    await kv.put(`community:${chatId}:suggestions:${body.type}`, JSON.stringify(list), { expirationTtl: 7 * 24 * 3600 });
+    await kv.put(`community:${chatId}:suggestions:${body.type}`, JSON.stringify(list), { expirationTtl: SUGGESTIONS_TTL });
     return json({ ok: true, suggestion: sug });
   }
 

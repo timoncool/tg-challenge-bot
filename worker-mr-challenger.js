@@ -660,9 +660,11 @@ const TTL = {
   SUBMISSIONS: 60 * 24 * 3600,      // 60 days - for annual stats calculation
   REACTIONS: 60 * 24 * 3600,        // 60 days
   CHALLENGES: 90 * 24 * 3600,       // 90 days - keep finished challenges for history
-  SUGGESTIONS: 7 * 24 * 3600,       // 7 days
+  // A poll, and the suggestions collected for it, must outlive the longest wait for its challenge:
+  // a monthly poll can open a week or more before the start, and suggestions gather all month.
+  SUGGESTIONS: 45 * 24 * 3600,
   ACTIVE_TOPICS: 31 * 24 * 3600,    // 31 days fallback
-  POLLS: 7 * 24 * 3600,             // 7 days - polls are temporary, deleted after use
+  POLLS: 40 * 24 * 3600,
   ALERTS: 90 * 24 * 3600,           // 90 days - bot alert log shown in the admin panel
   WEBHOOK_DEDUP: 3600,              // 1 hour
 };
@@ -3264,7 +3266,16 @@ async function startChallenge(env, chatId, config, tg, storage, type, startedAt 
     let theme = null;
     let voteCount = 0;
     const poll = await storage.getPoll(chatId, type);
-    if (poll) ({ theme, voteCount } = await takePollWinner(tg, storage, chatId, type, poll));
+    if (poll) {
+      ({ theme, voteCount } = await takePollWinner(tg, storage, chatId, type, poll));
+    } else {
+      // Normally the poll slot posted one: without it the members' vote is not what picks the theme.
+      await logAlert(
+        storage, "warn", "startChallenge",
+        `${SLOT_LABELS[`challenge:${type}`]} — ${communityLabel(config, chatId)}: опроса нет, тема будет от AI`,
+        { chatId, type },
+      );
+    }
     if (!theme) theme = await emergencyTheme(env, storage, chatId, type);
 
     const schedule = await getSchedule(storage, chatId);
