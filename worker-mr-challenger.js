@@ -286,28 +286,21 @@ async function removeCommunity(storage, chatId) {
   return { success: true, deletedKeys: cascadeResult.deleted || 0 };
 }
 
-// Получить конфиг для конкретного сообщества
-async function getCommunityConfig(storage, chatId) {
-  const communities = await getCommunities(storage);
-  const community = communities[String(chatId)];
-
-  if (!community) {
-    return null;
-  }
-
-  // Загружаем настройки топиков для этого сообщества
+// Конфиг зарегистрированного сообщества: запись из communities:list + его топики
+async function buildCommunityConfig(storage, chatId, community) {
   const topics = (await storage.get(`community:${chatId}:settings:topics`)) || {
     daily: 0,
     weekly: 0,
     monthly: 0,
     winners: 0,
   };
+  return { chatId, name: community.name, topics };
+}
 
-  return {
-    chatId: chatId,
-    name: community.name,
-    topics: topics,
-  };
+// Получить конфиг для конкретного сообщества
+async function getCommunityConfig(storage, chatId) {
+  const community = (await getCommunities(storage))[String(chatId)];
+  return community ? buildCommunityConfig(storage, chatId, community) : null;
 }
 
 // Обновить настройки топиков для сообщества
@@ -364,13 +357,10 @@ async function hasAccessToChat(env, storage, chatId) {
 async function getAllActiveCommunities(env, storage) {
   const result = [];
 
-  // Добавляем из KV
+  // Добавляем из KV: список читается один раз, а не заново на каждое сообщество
   const communities = await getCommunities(storage);
-  for (const chatId of Object.keys(communities)) {
-    const config = await getConfigForChat(env, storage, parseInt(chatId, 10));
-    if (config) {
-      result.push(config);
-    }
+  for (const [chatId, community] of Object.entries(communities)) {
+    result.push(await buildCommunityConfig(storage, parseInt(chatId, 10), community));
   }
 
   // Добавляем legacy если не дублируется
