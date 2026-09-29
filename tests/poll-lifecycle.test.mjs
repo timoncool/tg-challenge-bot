@@ -1,9 +1,5 @@
-// Regression tests for the poll → challenge lifecycle.
-//
-// Production incident (2026-08-22 .. 08-25): one KV delete of `poll:daily` did
-// not stick. generatePoll skips whenever *any* poll exists, so poll generation
-// deadlocked permanently, and startChallenge kept re-reading the same dead poll
-// and falling back to options[0] — the group got the identical topic every day.
+// Poll → challenge lifecycle. A KV delete can silently not stick, so a leftover poll
+// must never block the next poll or be served again as the topic source.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -89,8 +85,7 @@ test("an already-closed poll is not reused as the topic source", async () => {
 });
 
 test("a KV delete that does not stick is reported, not swallowed", async () => {
-  // Full replay of the production incident: the delete at challenge time is lost,
-  // and the next poll hour has to notice the leftover and report it.
+  // The delete at challenge time is lost; the next poll slot must notice and report it.
   const worker = await loadWorker();
   const kv = new FakeKV();
   const env = makeEnv(kv);

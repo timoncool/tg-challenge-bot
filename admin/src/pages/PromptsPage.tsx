@@ -89,14 +89,20 @@ export function PromptsPage() {
   function previewRendered() {
     const mode = tab === "template" ? "vanilla" : tab;
     const m = draft!.modes[mode];
-    const sample = m.corpus.slice().sort(() => Math.random() - 0.5).slice(0, 20);
-    const rendered = draft!.template
-      .replace(/\{TYPE\}/g, "ДНЕВНОГО")
-      .replace(/\{MODE\}/g, mode.toUpperCase())
-      .replace(/\{INSTRUCTION\}/g, m.instruction)
-      .replace(/\{SAMPLE\}/g, sample.join(", "))
-      .replace(/\{HISTORY\}/g, "");
-    setPreviewSrc(rendered);
+    const a = m.corpus.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    // Rendered like the bot does it: one pass over the template, edited text stays literal.
+    const values: Record<string, string> = {
+      TYPE: "ДНЕВНОГО",
+      MODE: mode.toUpperCase(),
+      INSTRUCTION: m.instruction,
+      SAMPLE: a.slice(0, 20).join(", "),
+      HISTORY: "",
+    };
+    setPreviewSrc(draft!.template.replace(/\{(TYPE|MODE|INSTRUCTION|SAMPLE|HISTORY)\}/g, (_, key: string) => values[key]));
   }
 
   return (

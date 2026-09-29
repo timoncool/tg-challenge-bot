@@ -54,6 +54,7 @@ export function CommunityAiTab({ chatId }: { chatId: number }) {
       qc.invalidateQueries({ queryKey: ["community-ai", chatId] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
+    onError: (e) => notifications.show({ message: (e as Error).message, color: "red" }),
   });
 
   if (q.isLoading) return <Skeleton h={200} />;
@@ -111,13 +112,12 @@ export function CommunityAiTab({ chatId }: { chatId: number }) {
               size="xs"
               variant="default"
               leftSection={<IconArrowsExchange size={12} />}
-              onClick={() => setEditing(override ?? {
+              onClick={() => setEditing(override ? { ...override, apiKey: "__UNCHANGED__" } : {
                 provider: "openrouter",
                 apiUrl: "https://openrouter.ai/api/v1/chat/completions",
                 apiKey: "",
                 model: "",
                 temperature: 0.95,
-                name: "OpenRouter (per-community)",
                 referer: "https://tg-challenge-bot-admin.pages.dev",
                 title: "tg-challenge-bot",
               })}
@@ -155,11 +155,6 @@ export function CommunityAiTab({ chatId }: { chatId: number }) {
       >
         {editing && (
           <Stack gap="md">
-            <TextInput
-              label="Название"
-              value={editing.name ?? ""}
-              onChange={(e) => setEditing({ ...editing, name: e.currentTarget.value })}
-            />
             <Group grow>
               <Select
                 label="Provider"
@@ -236,7 +231,6 @@ export function CommunityAiTab({ chatId }: { chatId: number }) {
                 onClick={() => saveM.mutate({
                   ...editing,
                   apiKey: editing.apiKey && editing.apiKey.length > 0 ? editing.apiKey : "__UNCHANGED__",
-                  name: editing.name && editing.name.trim() ? editing.name : `${editing.provider}/${editing.model}`,
                 })}
                 disabled={!editing.provider || !editing.apiUrl || !editing.model}
               >

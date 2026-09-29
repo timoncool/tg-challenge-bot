@@ -1,6 +1,12 @@
 import { Env, json } from "../_lib/auth";
 import { AdminStorage, nextOccurrence, ChallengeType } from "../_lib/storage";
 
+// The bot starts the next challenge at the minute the current one ends; it retries a failed
+// start every 10 minutes. Past this grace an active challenge means its start is failing.
+const OVERDUE_GRACE_MS = 15 * 60 * 1000;
+
+const AI_CONFIG_FIELDS = ["provider", "apiUrl", "apiKey", "model"] as const;
+
 export const onRequestGet: PagesFunction<Env> = async (ctx) => {
   const storage = new AdminStorage(ctx.env.CHALLENGE_KV);
 
@@ -28,6 +34,7 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
       if (!topics.monthly) warnings.push("Не настроена тема monthly");
       if (!topics.winners) warnings.push("Не настроена тема winners — победители не пересылаются");
 
+      let overdue = false;
       for (const type of ["daily", "weekly", "monthly"] as ChallengeType[]) {
         const [challenge, poll, pollVotes] = await Promise.all([
           storage.getChallenge(chatId, type),
@@ -38,12 +45,14 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
         let state: "active" | "poll-open" | "idle" | "stale" = "idle";
         let participants: number | undefined;
         let submissionsCount: number | undefined;
-        let lead: { username?: string; userId: number; score: number } | undefined;
+        let lead: { username?: string; tgUsername?: string | null; userId: number; score: number } | undefined;
 
         if (challenge?.status === "active") {
-          if (Date.now() > challenge.endsAt) {
+          if (Date.now() > challenge.endsAt + OVERDUE_GRACE_MS) {
             state = "stale";
-            warnings.push(`${type}: челлендж просрочен с ${new Date(challenge.endsAt).toLocaleString("ru-RU")} — нажми Finish`);
+            overdue = true;
+            const since = new Date(challenge.endsAt).toLocaleString("ru-RU", { timeZone: "UTC" });
+            warnings.push(`${type}: следующий челлендж не стартовал, текущий просрочен с ${since} UTC — нажми «Перезапустить» и смотри Алерты`);
           } else {
             state = "active";
           }
@@ -52,7 +61,7 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
           participants = new Set(submissions.map((s) => s.userId)).size;
           if (submissions.length > 0) {
             const top = submissions.slice().sort((a, b) => b.score - a.score)[0];
-            lead = { username: top.username, userId: top.userId, score: top.score };
+            lead = { username: top.username, tgUsername: top.tgUsername, userId: top.userId, score: top.score };
           }
         } else if (poll) {
           state = "poll-open";
@@ -84,13 +93,20 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
         }
       }
 
-      // Resolve effective AI config name
-      const aiOverride = await storage.get<{ name: string }>(`community:${chatId}:settings:ai`);
-      const aiGlobal = await storage.get<{ name: string }>(`settings:ai:global`);
-      const aiConfigName = aiOverride?.name ?? aiGlobal?.name ?? "env (legacy)";
+      // The engine the bot actually uses: an incomplete override is skipped by the bot too.
+      type StoredAi = { name?: string } & Partial<Record<(typeof AI_CONFIG_FIELDS)[number], string>>;
+      const complete = (cfg: StoredAi | null) => !!cfg && AI_CONFIG_FIELDS.every((f) => cfg[f]);
+      const aiOverride = await storage.get<StoredAi>(`community:${chatId}:settings:ai`);
+      const aiGlobal = await storage.get<StoredAi>(`settings:ai:global`);
+      const aiConfigName = complete(aiOverride)
+        ? aiOverride!.name ?? "community"
+        : complete(aiGlobal)
+          ? `${aiGlobal!.name ?? "global"}${aiOverride ? " (override сообщества неполный — пропущен)" : ""}`
+          : "env (legacy)";
 
+      // An overdue challenge means the schedule did not fire: that is broken, not a warning.
       const health: "healthy" | "warning" | "broken" =
-        warnings.length === 0 ? "healthy" : warnings.some((w) => w.startsWith("просрочен")) ? "warning" : warnings.length > 2 ? "broken" : "warning";
+        warnings.length === 0 ? "healthy" : overdue || warnings.length > 2 ? "broken" : "warning";
 
       return {
         community: c,

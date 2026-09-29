@@ -1,7 +1,5 @@
-// Production incident 2026-08-29: OpenRouter credits ran out, every AI call
-// returned 402. The slot was marked done *before* the action ran, so all three
-// groups silently went a full day with no challenge at all — and nothing was
-// reported anywhere. A failed slot must retry by itself and be reported.
+// A slot whose action failed (AI provider down, Telegram refusing, KV error) must not count
+// as done: it retries by itself, throttled, gives up after the window, and is reported.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

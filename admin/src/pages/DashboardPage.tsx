@@ -25,6 +25,7 @@ import { notifications } from "@mantine/notifications";
 import { useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/api/client";
 import { PageHeader } from "@/components/PageHeader";
+import { displayName } from "@/lib/names";
 import type {
   ChallengeType,
   CommunityDashboard,
@@ -116,7 +117,7 @@ export function DashboardPage() {
         <SimpleGrid cols={5} spacing="md" mb="xl" className="fade-in">
           <KpiCard label="Активных" value={totals.activeRuns} accent="violet" hint="Запущено" />
           <KpiCard label="Опросов" value={totals.openPolls}   accent="amber" hint="Голосование" />
-          <KpiCard label="Просрочено" value={totals.staleRuns} accent={totals.staleRuns > 0 ? "red" : "muted"} hint="Требуют finish" />
+          <KpiCard label="Просрочено" value={totals.staleRuns} accent={totals.staleRuns > 0 ? "red" : "muted"} hint="Старт не прошёл" />
           <KpiCard label="Участников" value={totals.participants} accent="mint" hint="За активные" />
           <KpiCard label="Работ"     value={totals.submissions}  accent="muted" hint="Всего отправлено" />
         </SimpleGrid>
@@ -417,7 +418,7 @@ function StateBody({
               label="Лидер"
               value={
                 <>
-                  @{data.lead.username ?? data.lead.userId}{" "}
+                  {displayName(data.lead)}{" "}
                   <span style={{ color: "var(--accent-bright)", fontWeight: 600 }}>{data.lead.score}</span>
                 </>
               }
@@ -486,12 +487,13 @@ function StateBody({
   }
 
   if (data.state === "stale" && data.challenge) {
+    // The next start did not happen; starting it also closes this one.
     return (
       <Stack gap={10}>
         <Text size="sm" fw={500} lineClamp={2}>{data.challenge.topic}</Text>
-        <Text size="11px" c="var(--red)">просрочен с {fmtDate(data.challenge.endsAt)}</Text>
-        <Button size="compact-xs" color="red" onClick={() => void triggerAction(chatId, "finish", type, qc)}>
-          Завершить срочно
+        <Text size="11px" c="var(--red)">следующий не стартовал, просрочен с {fmtDate(data.challenge.endsAt)}</Text>
+        <Button size="compact-xs" color="red" onClick={() => void triggerAction(chatId, "start", type, qc)}>
+          Перезапустить
         </Button>
       </Stack>
     );

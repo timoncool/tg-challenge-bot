@@ -62,6 +62,7 @@ export interface Submission {
   messageId: number;
   userId: number;
   username?: string;
+  tgUsername?: string | null;
   score: number;
   timestamp: number;
 }
@@ -127,7 +128,7 @@ export interface CommunityDashboard {
       pollVotes?: { total: number; options: { text: string; votes: number }[] };
       participants?: number;
       submissionsCount?: number;
-      lead?: { username?: string; userId: number; score: number };
+      lead?: { username?: string; tgUsername?: string | null; userId: number; score: number };
       nextPollAt?: number;
       nextChallengeAt?: number;
     }

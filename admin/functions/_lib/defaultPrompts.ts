@@ -1,5 +1,5 @@
-// Полный дефолтный корпус и инструкции (скопировано 1:1 из worker-mr-challenger.js).
-// Используются если в KV settings:ai:prompts пусто. Можно полностью переопределить из админки.
+// Default template, instructions and corpus — must equal BUILTIN_PROMPTS in worker-mr-challenger.js
+// (tests/prompt-drift.test.mjs checks it). Used while settings:ai:prompts is empty.
 
 export const DEFAULT_TEMPLATE = `Ты — креативный директор арт-сообщества. Твоя задача: родить 6 мощных тем для {TYPE} челленджа.
 Режим: {MODE}.
@@ -37,7 +37,7 @@ export const DEFAULT_INSTRUCTIONS = {
   medium:
     "МИКС КРАСОТЫ И ДРАМЫ: Поп-культура, культовые персонажи кино и игр. Нуар, триллер, крутые герои, интрига.\nБЕЗ ПОРНО: Допускается мрачность и дерзость, но без открытой эротики и фетишей.",
   nsfw:
-    "ТОЛЬКО NSFW (18+): Жесткая эротика, фетиши, сексуальные ситуации, акцент на обнаженном теле и материалах.\nПРАВИЛО: Тема должна быть провокационной, смелой и сексуальной.",
+    "ТОЛЬКО NSFW (18+): Художественная эротика, фетиши, сексуальные ситуации, акцент на обнаженном теле и материалах.\nПРАВИЛО: Тема должна быть провокационной, смелой и сексуальной.",
 };
 
 export const DEFAULT_CORPUS = {
@@ -198,7 +198,8 @@ export const DEFAULT_PROMPTS = {
   template: DEFAULT_TEMPLATE,
   modes: {
     vanilla: { instruction: DEFAULT_INSTRUCTIONS.vanilla, corpus: DEFAULT_CORPUS.vanilla },
-    medium:  { instruction: DEFAULT_INSTRUCTIONS.medium,  corpus: DEFAULT_CORPUS.medium },
+    // The bot samples medium themes from both lists; the default shows exactly that.
+    medium:  { instruction: DEFAULT_INSTRUCTIONS.medium,  corpus: [...DEFAULT_CORPUS.vanilla, ...DEFAULT_CORPUS.medium] },
     nsfw:    { instruction: DEFAULT_INSTRUCTIONS.nsfw,    corpus: DEFAULT_CORPUS.nsfw },
   },
 };

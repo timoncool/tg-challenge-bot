@@ -25,6 +25,7 @@ import {
 } from "@tabler/icons-react";
 import { api } from "@/api/client";
 import { notifications } from "@mantine/notifications";
+import { displayName } from "@/lib/names";
 
 type ChallengeType = "daily" | "weekly" | "monthly";
 
@@ -49,6 +50,7 @@ interface Submission {
   messageId: number;
   userId: number;
   username?: string;
+  tgUsername?: string | null;
   score: number;
   timestamp: number;
   reactions: Record<string, number>;
@@ -253,7 +255,7 @@ function SubmissionsDrawer({
                 <Group gap={8}>
                   {i === 0 && q.data!.submissions[0].score > 0 && <IconTrophy size={14} color="var(--accent)" />}
                   <Text size="13px" fw={500}>
-                    @{s.username ?? `user${s.userId}`}
+                    {displayName(s)}
                   </Text>
                   <Text size="10px" c="dimmed" className="mono">msg {s.messageId}</Text>
                 </Group>

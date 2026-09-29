@@ -4,12 +4,14 @@ import { Box, Stack, Group, Text, Button, Skeleton, Badge, SegmentedControl, Ale
 import { IconCheck, IconTrash, IconBulb } from "@tabler/icons-react";
 import { api } from "@/api/client";
 import { notifications } from "@mantine/notifications";
+import { displayName } from "@/lib/names";
 
 interface Suggestion {
   id: string;
   messageId: number;
   userId: number;
   username?: string;
+  tgUsername?: string | null;
   theme: string;
   createdAt: number;
   reactionCount: number;
@@ -46,14 +48,17 @@ export function CommunitySuggestionsTab({ chatId }: { chatId: number }) {
       notifications.show({ message: "Удалено", color: "violet" });
       qc.invalidateQueries({ queryKey: ["community-suggestions", chatId] });
     },
+    onError: (e) => notifications.show({ message: (e as Error).message, color: "red" }),
   });
 
   const clearAllM = useMutation({
-    mutationFn: () => api.delete(`/api/communities/${chatId}/suggestions`),
+    // All three types at once: the endpoint wants that confirmed explicitly.
+    mutationFn: () => api.delete(`/api/communities/${chatId}/suggestions?confirm=all`),
     onSuccess: () => {
       notifications.show({ message: "Очищено", color: "violet" });
       qc.invalidateQueries({ queryKey: ["community-suggestions", chatId] });
     },
+    onError: (e) => notifications.show({ message: (e as Error).message, color: "red" }),
   });
 
   if (q.isLoading) return <Skeleton h={400} />;
@@ -119,7 +124,7 @@ export function CommunitySuggestionsTab({ chatId }: { chatId: number }) {
                     <Stack gap={4} style={{ flex: 1 }}>
                       <Text size="13px">{s.theme}</Text>
                       <Group gap={8}>
-                        <Text size="10px" c="dimmed">@{s.username ?? `user${s.userId}`}</Text>
+                        <Text size="10px" c="dimmed">{displayName(s)}</Text>
                         <Text size="10px" c="dimmed">·</Text>
                         <Text size="10px" c="dimmed">{new Date(s.createdAt).toLocaleString("ru-RU")}</Text>
                       </Group>

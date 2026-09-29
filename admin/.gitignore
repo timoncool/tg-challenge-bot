@@ -7,6 +7,5 @@ dist/
 .wrangler/
 .dev.vars
 
-# Backups stay tracked (this IS the safety net), but exclude WIP/temp dumps
-backups/*.tmp.json
-backups/*.partial.json
+# KV dumps contain the AI API keys: never commit them to this public repo.
+backups/

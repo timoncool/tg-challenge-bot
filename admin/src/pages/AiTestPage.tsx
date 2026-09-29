@@ -52,7 +52,7 @@ interface TestResult {
 const MODE_META = {
   vanilla: { label: "VANILLA",  color: "var(--green)",  emoji: "🍦", desc: "SFW, безопасный контент" },
   medium:  { label: "MEDIUM",   color: "var(--accent)", emoji: "🔥", desc: "поп-культура, нуар, без эротики" },
-  nsfw:    { label: "NSFW",     color: "var(--red)",    emoji: "🌙", desc: "18+, жёсткая эротика" },
+  nsfw:    { label: "NSFW",     color: "var(--red)",    emoji: "🌙", desc: "18+, художественная эротика" },
 } as const;
 
 export function AiTestPage() {
@@ -61,6 +61,8 @@ export function AiTestPage() {
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState(0.95);
+  // A saved engine is tested with its own temperature unless the slider was moved.
+  const [temperatureTouched, setTemperatureTouched] = useState(false);
   const [type, setType] = useState<"daily" | "weekly" | "monthly">("daily");
   const [useGlobal, setUseGlobal] = useState(false);
   const [presetId, setPresetId] = useState<string | null>(null);
@@ -112,13 +114,10 @@ export function AiTestPage() {
       const body: Record<string, unknown> = { type, modes };
       if (useGlobal) {
         body.useGlobal = true;
-        // override model / temperature если юзер их поменял в UI
-        if (model) body.modelOverride = model;
-        if (typeof temperature === "number") body.temperatureOverride = temperature;
       } else if (presetId) {
         body.usePresetId = presetId;
         if (model) body.modelOverride = model;
-        if (typeof temperature === "number") body.temperatureOverride = temperature;
+        if (temperatureTouched) body.temperatureOverride = temperature;
       } else {
         body.config = {
           provider, apiUrl, apiKey, model, temperature,
@@ -140,6 +139,7 @@ export function AiTestPage() {
     setApiKey(""); // we'll send via usePresetId; show empty in UI
     setModel(p.model);
     setTemperature(p.temperature ?? 0.95);
+    setTemperatureTouched(false);
     setUseGlobal(false);
     setPresetId(id);
   }
@@ -278,7 +278,7 @@ export function AiTestPage() {
             </Text>
             <Slider
               value={temperature}
-              onChange={setTemperature}
+              onChange={(v) => { setTemperature(v); setTemperatureTouched(true); }}
               min={0}
               max={2}
               step={0.05}

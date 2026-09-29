@@ -1,7 +1,5 @@
-// Cloudflare cron is best-effort: `scheduledTime` drifts inside the minute and a
-// tick can be dropped. Matching a slot with `h === H && m === M` silently lost a
-// whole day's poll or challenge when its one minute went missing, and ran things
-// twice when the same minute was delivered twice.
+// Cron slots. Cloudflare cron is best-effort: scheduledTime drifts inside the minute
+// and ticks get dropped or delivered twice. Each slot must run exactly once, late if need be.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

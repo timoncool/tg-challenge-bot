@@ -8,10 +8,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "pages:deploy": "npm run build && node scripts/pages-deploy.mjs",
+    "pages:deploy": "npm run build && npx wrangler pages deploy dist --project-name=tg-challenge-bot-admin --commit-dirty=true",
     "pages:setup": "node scripts/pages-setup.mjs",
     "kv:backup": "node scripts/kv-backup.mjs",
-    "kv:restore": "node scripts/kv-restore.mjs",
     "typecheck": "tsc -b --noEmit"
   },
   "engines": {

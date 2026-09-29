@@ -28,11 +28,11 @@ import { notifications } from "@mantine/notifications";
 interface Schedule { cron: string; created_on?: string; modified_on?: string; }
 interface CronResp { worker: string; schedules: Schedule[]; }
 
+// The bot resolves minute-precise per-community slots and catches up a missed tick for
+// up to 55 minutes — anything sparser than every 5 minutes silently drops slots.
 const PRESETS: { label: string; cron: string; desc: string }[] = [
-  { cron: "0 * * * *",      label: "Каждый час",     desc: "Рекомендуется — бот сам решает по per-community schedule" },
-  { cron: "*/30 * * * *",   label: "Каждые 30 мин",  desc: "Чаще проверять, реакция быстрее на ручные правки" },
-  { cron: "0 */6 * * *",    label: "Каждые 6 часов", desc: "Реже — для тестов" },
-  { cron: "0 0 * * *",      label: "Раз в сутки",    desc: "Только daily в полночь UTC — для минимум активности" },
+  { cron: "* * * * *",   label: "Каждую минуту", desc: "Рекомендуется — опросы и старты точно по расписанию" },
+  { cron: "*/5 * * * *", label: "Каждые 5 мин",  desc: "Допустимо — события с опозданием до 5 минут" },
 ];
 
 export function TriggersPage() {
@@ -62,7 +62,7 @@ export function TriggersPage() {
         crumb="CONTROL ROOM / 07 / CRON TRIGGERS"
         title="Внутренний планировщик"
         emphasis="планировщик"
-        subtitle="Cloudflare Workers Cron на воркере бота. Заменяет ручные scheduled-сообщения в Telegram. Когда триггер срабатывает, бот сам перебирает все комьюнити и сравнивает текущий час с per-community schedule."
+        subtitle="Cloudflare Workers Cron на воркере бота. На каждом срабатывании бот проверяет расписание всех комьюнити и запускает то, что пора, с догоном пропущенных тиков и повторами при сбое."
       />
 
       {q.isLoading && <Skeleton h={200} />}
@@ -90,7 +90,7 @@ export function TriggersPage() {
                 size="xs"
                 variant="default"
                 leftSection={<IconPlus size={14} />}
-                onClick={() => setDraft([...draft, { cron: "0 * * * *" }])}
+                onClick={() => setDraft([...draft, { cron: "* * * * *" }])}
               >
                 Добавить
               </Button>
@@ -100,7 +100,7 @@ export function TriggersPage() {
               <Alert color="amber" variant="light" radius="md" icon={<IconAlertTriangle size={14} />}>
                 <Text size="sm">
                   Нет cron triggers. Бот не будет автоматически создавать опросы/челленджи.
-                  Добавь хотя бы <Code>0 * * * *</Code> (раз в час).
+                  Добавь <Code>* * * * *</Code> (каждую минуту).
                 </Text>
               </Alert>
             )}
@@ -123,7 +123,7 @@ export function TriggersPage() {
                       next[i] = { ...next[i], cron: e.currentTarget.value };
                       setDraft(next);
                     }}
-                    placeholder="0 * * * *"
+                    placeholder="* * * * *"
                     style={{ flex: 1 }}
                     styles={{ input: { fontFamily: "var(--font-mono)", background: "transparent", border: "none" } }}
                     size="sm"
@@ -190,9 +190,9 @@ export function TriggersPage() {
           <Alert color="violet" variant="light" radius="md">
             <Text size="sm" fw={500} mb={4}>Как перевести с Telegram scheduled messages</Text>
             <Stack gap={2}>
-              <Text size="12px">1. Сохрани здесь <Code>0 * * * *</Code> (или сразу один из пресетов выше)</Text>
+              <Text size="12px">1. Сохрани здесь <Code>* * * * *</Code> (или сразу один из пресетов выше)</Text>
               <Text size="12px">2. Зайди в Telegram → каждая твоя group → найди scheduled-сообщения с автоповтором → удали</Text>
-              <Text size="12px">3. Готово — бот будет сам срабатывать каждый час по cron'у Cloudflare</Text>
+              <Text size="12px">3. Готово — бот будет сам срабатывать каждую минуту по cron'у Cloudflare</Text>
             </Stack>
           </Alert>
         </Stack>
@@ -205,8 +205,9 @@ function humanize(cron: string): string {
   const parts = cron.trim().split(/\s+/);
   if (parts.length !== 5) return "";
   const [m, h, dom, mo, dow] = parts;
-  if (m === "0" && h === "*" && dom === "*" && mo === "*" && dow === "*") return "каждый час";
-  if (m === "*/30" && h === "*") return "каждые 30 мин";
+  if (m === "*" && h === "*" && dom === "*" && mo === "*" && dow === "*") return "каждую минуту";
+  if (m.startsWith("*/") && h === "*" && dom === "*") return `каждые ${m.slice(2)} мин`;
+  if (m === "0" && h === "*" && dom === "*" && mo === "*" && dow === "*") return "каждый час — слоты с минутами теряются";
   if (m === "0" && h === "0" && dom === "*") return "ежедневно в 00:00 UTC";
   if (m === "0" && h.startsWith("*/")) return `каждые ${h.slice(2)} ч`;
   return cron;

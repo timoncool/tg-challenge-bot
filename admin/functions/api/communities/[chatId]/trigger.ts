@@ -1,12 +1,8 @@
 import { Env, json } from "../../../_lib/auth";
 import { requireCommunity, isGuardErr } from "../../../_lib/guards";
 
-// Proxy для ручных триггеров: дёргает существующие endpoints воркера бота
-//   POST /admin/poll/{type}?chat_id=...
-//   POST /admin/start/{type}?chat_id=...
-//   POST /admin/finish/{type}?chat_id=...
-//
-// cancel-poll пока не реализован в самом боте — вернём 501 чтобы UI знал.
+// Proxy для ручных триггеров: дёргает endpoints воркера бота
+//   POST /admin/{poll|cancel-poll|start|finish}/{type}?chat_id=...
 
 interface BotEnv extends Env {
   BOT_WORKER_URL?: string;
@@ -47,13 +43,6 @@ export const onRequestPost: PagesFunction<BotEnv> = async (ctx) => {
     return json({ error: "type must be daily|weekly|monthly" }, { status: 400 });
   }
 
-  if (body.action === "cancel-poll") {
-    return json(
-      { error: "cancel-poll пока не реализован в боте — добавится при следующем рефакторе" },
-      { status: 501 }
-    );
-  }
-
   const url = `${ctx.env.BOT_WORKER_URL.replace(/\/$/, "")}/admin/${body.action}/${body.type}?chat_id=${chatId}`;
 
   try {
@@ -66,8 +55,9 @@ export const onRequestPost: PagesFunction<BotEnv> = async (ctx) => {
     try { payload = JSON.parse(text); } catch { /* keep as text */ }
 
     if (!r.ok) {
+      const reason = (payload as { error?: unknown } | null)?.error;
       return json(
-        { error: `Bot worker returned ${r.status}`, upstream: payload },
+        { error: reason ? `Бот: ${String(reason)}` : `Bot worker returned ${r.status}`, upstream: payload },
         { status: r.status === 401 ? 502 : r.status }
       );
     }

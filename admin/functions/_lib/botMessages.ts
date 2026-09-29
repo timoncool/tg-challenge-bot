@@ -1,7 +1,6 @@
-// Полный набор текстов которые бот шлёт в Telegram.
-// Источники: worker-mr-challenger.js (массивы submissionReactions/winnerPhrases + объект `ru`).
-// В KV сохраняются под `settings:messages` (опционально, частичный override).
-// Поддерживаются плейсхолдеры — {username}, {score}, {topic}, {endDate} и т.д.
+// Полный набор текстов, которые бот шлёт в Telegram: копия DEFAULT_TEXTS из worker-mr-challenger.js
+// (tests/texts-drift.test.mjs сверяет). В KV — `settings:messages`, частичный override.
+// Плейсхолдеры — {username}, {score}, {votes}, {topic}, {endDate} и т.д.
 
 export const DEFAULT_BOT_MESSAGES = {
   // Реакции Mr Challenger при принятии работы (рандомная выбирается)
@@ -62,15 +61,15 @@ export const DEFAULT_BOT_MESSAGES = {
 
 <i>/stats · /leaderboard · /current</i>`,
 
-  // Объявление победителя в треде челленджа. Плейсхолдеры: {username}, {score}
+  // Объявление победителя в треде челленджа. Плейсхолдеры: {username}, {score}, {votes} («5 голосов»), {phrase}
   winnerAnnouncementTemplate: `🥂 <b>ПОБЕДИТЕЛЬ</b>
 
 {username} забирает этот раунд.
-Результат: <b>{score}</b> голосов.
+Результат: <b>{votes}</b>.
 
 {phrase}`,
 
-  // Объявление победителя в треде «Победители». Плейсхолдеры: {username}, {score}, {topic}, {phrase}
+  // Объявление победителя в треде «Победители». Плейсхолдеры: {username}, {score}, {votes}, {topic}, {phrase}
   winnerAnnouncementFullTemplate: `🏆 <b>ЛУЧШАЯ РАБОТА</b>
 
 Автор: {username}
@@ -81,6 +80,9 @@ export const DEFAULT_BOT_MESSAGES = {
 
   // Когда никто не прислал работ
   noSubmissions: "🤔 <i>Тишина? Жаль. Надеюсь, вы копите силы для следующего раза.</i>",
+
+  // Когда работы есть, но ни одна не набрала голосов — победителя нет
+  noVotes: "🤷 <i>Работы есть, а голосов нет. В этот раз без победителя.</i>",
 
   // Когда юзер упёрся в лимит работ. Плейсхолдеры: {current}, {max}, {workWord}, {maxWord}
   submissionLimitReached: "⚠️ Уже <b>{current}</b> {workWord} в игре. Максимум — <b>{max}</b> {maxWord}. Терпение.",

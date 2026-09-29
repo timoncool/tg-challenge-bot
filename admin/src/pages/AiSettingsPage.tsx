@@ -40,7 +40,8 @@ const SENTINEL = "__UNCHANGED__";
 export function AiSettingsPage() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Partial<AiConfig> | null>(null);
-  const [saveAs, setSaveAs] = useState<"global" | "preset" | null>(null);
+  // "global" edits the bot's engine, "preset" adds a new preset, an id edits that preset.
+  const [saveAs, setSaveAs] = useState<"global" | "preset" | { presetId: string } | null>(null);
 
   const globalQ = useQuery({
     queryKey: ["ai", "global"],
@@ -75,6 +76,18 @@ export function AiSettingsPage() {
     onError: (e) => notifications.show({ message: (e as Error).message, color: "red" }),
   });
 
+  const updatePreset = useMutation({
+    mutationFn: ({ id, cfg }: { id: string; cfg: Partial<AiConfig> }) =>
+      api.put<{ ok: true }>(`/api/ai/presets?id=${encodeURIComponent(id)}`, cfg),
+    onSuccess: () => {
+      notifications.show({ message: "Preset обновлён", color: "yellow" });
+      qc.invalidateQueries({ queryKey: ["ai", "presets"] });
+      setEditing(null);
+      setSaveAs(null);
+    },
+    onError: (e) => notifications.show({ message: (e as Error).message, color: "red" }),
+  });
+
   const delPreset = useMutation({
     mutationFn: (id: string) => api.delete<{ ok: true }>(`/api/ai/presets?id=${encodeURIComponent(id)}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ai", "presets"] }),
@@ -93,9 +106,9 @@ export function AiSettingsPage() {
     setSaveAs("preset");
   }
 
-  function openEdit(cfg: AiConfig) {
+  function openEdit(cfg: AiConfig, target: "global" | { presetId: string }) {
     setEditing({ ...cfg, apiKey: SENTINEL });
-    setSaveAs("global");
+    setSaveAs(target);
   }
 
   return (
@@ -115,7 +128,7 @@ export function AiSettingsPage() {
           Подключи <em style={{ color: "var(--accent)" }}>любой движок</em>.
         </Text>
         <Text size="sm" c="dimmed" mt={6}>
-          Сохрани токен один раз — бот переключится без redeploy. Сейчас работает Gemini из env воркера.
+          Сохрани токен один раз — бот переключится без redeploy.
         </Text>
       </Stack>
 
@@ -150,10 +163,10 @@ export function AiSettingsPage() {
                   <Field label="PROVIDER" value={globalQ.data.config.provider} />
                   <Field label="MODEL"    value={globalQ.data.config.model} mono />
                   <Field label="API_KEY"  value={globalQ.data.config.apiKey} mono />
-                  <Field label="TEMP"     value={String(globalQ.data.config.temperature ?? 0.95)} mono />
+                  <Field label="TEMP"     value={globalQ.data.config.temperature === undefined ? "по умолчанию модели" : String(globalQ.data.config.temperature)} mono />
                 </Group>
               </Stack>
-              <Button variant="default" size="xs" onClick={() => openEdit(globalQ.data!.config!)}>
+              <Button variant="default" size="xs" onClick={() => openEdit(globalQ.data!.config!, "global")}>
                 EDIT
               </Button>
             </Group>
@@ -256,7 +269,7 @@ export function AiSettingsPage() {
               <Button
                 size="compact-xs"
                 variant="default"
-                onClick={() => openEdit(p)}
+                onClick={() => openEdit(p, { presetId: p.id })}
               >
                 EDIT
               </Button>
@@ -281,7 +294,7 @@ export function AiSettingsPage() {
         size="lg"
         title={
           <Text fw={600} className="mono" style={{ letterSpacing: "0.06em" }}>
-            {saveAs === "global" ? "EDIT GLOBAL" : "NEW PRESET"}
+            {saveAs === "global" ? "EDIT GLOBAL" : saveAs === "preset" ? "NEW PRESET" : "EDIT PRESET"}
           </Text>
         }
         radius="sm"
@@ -300,9 +313,10 @@ export function AiSettingsPage() {
                 name: c.name && c.name.trim() ? c.name : `${c.provider}/${c.model}`,
               };
               if (saveAs === "global") setGlobal.mutate(payload);
-              else addPreset.mutate(payload);
+              else if (saveAs === "preset") addPreset.mutate(payload);
+              else if (saveAs) updatePreset.mutate({ id: saveAs.presetId, cfg: payload });
             }}
-            saving={setGlobal.isPending || addPreset.isPending}
+            saving={setGlobal.isPending || addPreset.isPending || updatePreset.isPending}
           />
         )}
       </Modal>
@@ -317,9 +331,16 @@ function TokensSection() {
     queryFn: () => api.get<{ openrouter: { hasToken: boolean; masked: string }; gemini: { hasToken: boolean; masked: string } }>("/api/ai/tokens"),
   });
   const saveM = useMutation({
-    mutationFn: (b: { openrouter?: string; gemini?: string }) => api.put<{ ok: true }>("/api/ai/tokens", b),
-    onSuccess: () => {
-      notifications.show({ message: "Токены сохранены", color: "yellow" });
+    mutationFn: (b: { openrouter?: string; gemini?: string }) => api.put<{ ok: true; updatedConfigs: number }>("/api/ai/tokens", b),
+    onSuccess: (r) => {
+      notifications.show({
+        message: r.updatedConfigs
+          ? `Токены сохранены, новый ключ записан в конфиги: ${r.updatedConfigs}`
+          : "Токены сохранены",
+        color: "yellow",
+      });
+      qc.invalidateQueries({ queryKey: ["ai", "global"] });
+      qc.invalidateQueries({ queryKey: ["ai", "presets"] });
       qc.invalidateQueries({ queryKey: ["ai", "tokens"] });
       setOr(""); setGem("");
     },

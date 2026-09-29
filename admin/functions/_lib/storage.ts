@@ -106,7 +106,7 @@ export class AdminStorage {
   async getSubmissions(chatId: number, type: ChallengeType, challengeId: number) {
     return (
       (await this.get<
-        { messageId: number; userId: number; username?: string; score: number; timestamp: number }[]
+        { messageId: number; userId: number; username?: string; tgUsername?: string | null; score: number; timestamp: number }[]
       >(this.k(chatId, "submissions", type, challengeId))) ?? []
     );
   }
@@ -149,65 +149,66 @@ export class AdminStorage {
   }
 }
 
-/** Compute next poll/challenge time given a schedule entry (UTC). */
-export function nextOccurrence(now: Date, type: ChallengeType, schedule: ReturnType<AdminStorage["getSchedule"]> extends Promise<infer S> ? S : never) {
-  const utc = new Date(now.toISOString());
-  const out: { nextPollAt?: number; nextChallengeAt?: number } = {};
+type Slot = { day?: number; hour?: number; minute?: number };
+type ScheduleEntry = {
+  pollDay?: number; pollHour?: number; pollMinute?: number;
+  challengeDay?: number; challengeHour?: number; challengeMinute?: number;
+};
 
+// Mirrors slotAt / lastSlotOccurrence / nextSlotOccurrence in worker-mr-challenger.js.
+function slotAt(schedule: Record<ChallengeType, ScheduleEntry>, type: ChallengeType, action: "poll" | "challenge"): Slot {
+  const s = schedule[type] ?? {};
+  // Anything but an integer leaves the slot unscheduled, as in the bot.
+  const int = (v: unknown) => (Number.isInteger(v) ? (v as number) : undefined);
+  if (action === "challenge") return { day: int(s.challengeDay), hour: int(s.challengeHour), minute: int(s.challengeMinute) ?? 0 };
+  const minute = int(s.pollMinute) ?? 0;
+  const challengeHour = int(s.challengeHour);
+  const challengeDay = int(s.challengeDay);
   if (type === "daily") {
-    const challengeHour = schedule.daily.challengeHour;
-    const pollHour = (challengeHour - 12 + 24) % 24;
-    out.nextPollAt = nextHourUtc(utc, pollHour);
-    out.nextChallengeAt = nextHourUtc(utc, challengeHour);
-  } else if (type === "weekly") {
-    out.nextPollAt = nextDayOfWeekUtc(
-      utc,
-      (schedule.weekly.challengeDay + 6) % 7,
-      schedule.weekly.pollHour ?? 10
-    );
-    out.nextChallengeAt = nextDayOfWeekUtc(
-      utc,
-      schedule.weekly.challengeDay ?? 0,
-      schedule.weekly.challengeHour
-    );
-  } else if (type === "monthly") {
-    const pollDay = (schedule.monthly.challengeDay ?? 1) === 1 ? 28 : (schedule.monthly.challengeDay ?? 1) - 3;
-    out.nextPollAt = nextDayOfMonthUtc(utc, pollDay, schedule.monthly.pollHour ?? 10);
-    out.nextChallengeAt = nextDayOfMonthUtc(
-      utc,
-      schedule.monthly.challengeDay ?? 1,
-      schedule.monthly.challengeHour
-    );
+    return { hour: int(s.pollHour) ?? (challengeHour === undefined ? undefined : (challengeHour + 12) % 24), minute };
   }
+  if (type === "weekly") {
+    const day = int(s.pollDay) ?? (challengeDay === undefined ? undefined : (challengeDay + 6) % 7);
+    return { day, hour: int(s.pollHour), minute };
+  }
+  const day = int(s.pollDay) ?? (challengeDay === undefined ? undefined : challengeDay === 1 ? 28 : challengeDay - 3);
+  return { day, hour: int(s.pollHour), minute };
+}
+
+function lastSlotOccurrence(now: Date, kind: ChallengeType, { day, hour, minute }: Slot): number {
+  const H = Number.isInteger(hour) ? hour! : 0;
+  const M = Number.isInteger(minute) ? minute! : 0;
+  const y = now.getUTCFullYear();
+  const mo = now.getUTCMonth();
+  const at = new Date(Date.UTC(y, mo, now.getUTCDate(), H, M, 0, 0));
+  if (kind === "daily") {
+    if (at > now) at.setUTCDate(at.getUTCDate() - 1);
+    return at.getTime();
+  }
+  if (kind === "weekly") {
+    at.setUTCDate(at.getUTCDate() - ((at.getUTCDay() - (day ?? 0) + 7) % 7));
+    if (at > now) at.setUTCDate(at.getUTCDate() - 7);
+    return at.getTime();
+  }
+  const dom = Math.min(Math.max(day ?? 1, 1), 28);
+  const month = new Date(Date.UTC(y, mo, dom, H, M, 0, 0));
+  return month > now ? Date.UTC(y, mo - 1, dom, H, M, 0, 0) : month.getTime();
+}
+
+function nextSlotOccurrence(after: Date, kind: ChallengeType, at: Slot): number {
+  const next = new Date(lastSlotOccurrence(after, kind, at));
+  if (kind === "daily") next.setUTCDate(next.getUTCDate() + 1);
+  else if (kind === "weekly") next.setUTCDate(next.getUTCDate() + 7);
+  else next.setUTCMonth(next.getUTCMonth() + 1);
+  return next.getTime();
+}
+
+/** Next poll and challenge instants for a type (UTC), exactly as the bot schedules them. */
+export function nextOccurrence(now: Date, type: ChallengeType, schedule: Record<ChallengeType, ScheduleEntry>) {
+  const out: { nextPollAt?: number; nextChallengeAt?: number } = {};
+  const poll = slotAt(schedule, type, "poll");
+  const challenge = slotAt(schedule, type, "challenge");
+  if (Number.isInteger(poll.hour)) out.nextPollAt = nextSlotOccurrence(now, type, poll);
+  if (Number.isInteger(challenge.hour)) out.nextChallengeAt = nextSlotOccurrence(now, type, challenge);
   return out;
-}
-
-function nextHourUtc(now: Date, hour: number): number {
-  const d = new Date(now);
-  d.setUTCMinutes(0, 0, 0);
-  d.setUTCHours(hour);
-  if (d.getTime() <= now.getTime()) d.setUTCDate(d.getUTCDate() + 1);
-  return d.getTime();
-}
-
-function nextDayOfWeekUtc(now: Date, weekday: number, hour: number): number {
-  const d = new Date(now);
-  d.setUTCMinutes(0, 0, 0);
-  d.setUTCHours(hour);
-  const diff = (weekday - d.getUTCDay() + 7) % 7;
-  if (diff === 0 && d.getTime() <= now.getTime()) d.setUTCDate(d.getUTCDate() + 7);
-  else d.setUTCDate(d.getUTCDate() + diff);
-  return d.getTime();
-}
-
-function nextDayOfMonthUtc(now: Date, day: number, hour: number): number {
-  const d = new Date(now);
-  d.setUTCMinutes(0, 0, 0);
-  d.setUTCHours(hour);
-  d.setUTCDate(day);
-  if (d.getTime() <= now.getTime()) {
-    d.setUTCMonth(d.getUTCMonth() + 1);
-    d.setUTCDate(day);
-  }
-  return d.getTime();
 }

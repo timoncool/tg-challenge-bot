@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Box, Stack, Group, Text, SegmentedControl, Skeleton, TextInput } from "@mantine/core";
 import { IconSearch, IconTrophy } from "@tabler/icons-react";
 import { api } from "@/api/client";
+import { displayName } from "@/lib/names";
 
 interface Entry { userId: number; username?: string; wins: number; participations: number; lastWin?: number; }
 interface Resp {
@@ -74,7 +75,7 @@ export function CommunityLeaderboardTab({ chatId }: { chatId: number }) {
                     {String(i + 1).padStart(2, "0")}
                   </Text>
                   {isPodium && <IconTrophy size={14} color={medalColor} />}
-                  <Text size="14px" fw={500}>@{e.username ?? `user${e.userId}`}</Text>
+                  <Text size="14px" fw={500}>{displayName(e)}</Text>
                 </Group>
                 <Group gap={24}>
                   <Stack gap={0} align="flex-end">

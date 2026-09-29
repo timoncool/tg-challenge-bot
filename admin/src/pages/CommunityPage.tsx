@@ -74,10 +74,12 @@ export function CommunityPage() {
   const saveM = useMutation({
     mutationFn: (payload: Partial<Settings>) =>
       api.patch<{ ok: true }>(`/api/communities/${chatId}/settings`, payload),
-    onSuccess: () => {
+    onSuccess: async () => {
       notifications.show({ message: "Сохранено", color: "violet" });
-      qc.invalidateQueries({ queryKey: ["community-settings", chatId] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      // Re-seed the form from what the server stored: the save bar compares the two.
+      await qc.invalidateQueries({ queryKey: ["community-settings", chatId] });
+      setDraft(qc.getQueryData<Settings>(["community-settings", chatId]) ?? null);
     },
     onError: (e) => notifications.show({ message: (e as Error).message, color: "red" }),
   });

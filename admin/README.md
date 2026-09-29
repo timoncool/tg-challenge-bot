@@ -93,9 +93,7 @@ admin/
 │       └── dashboard.ts             # сводка для главной
 ├── scripts/
 │   ├── pages-setup.mjs              # одноразовый setup CF Pages + KV bindings
-│   ├── pages-deploy.mjs             # CF REST для assets-only (не для full deploy)
-│   ├── kv-backup.mjs                # JSON-дамп KV
-│   └── kv-restore.mjs               # обратно
+│   └── kv-backup.mjs                # JSON-дамп KV
 ├── public/favicon.svg
 ├── index.html
 ├── package.json
@@ -119,8 +117,7 @@ cp .env.example .env.local
 
 ```
 CF_ACCOUNT_ID=…                         # CF Dashboard → My Profile
-CF_AUTH_EMAIL=you@example.com
-CF_AUTH_KEY=…                           # Global API Key
+CF_API_TOKEN=…                          # API Token: Workers Scripts:Edit, Workers KV:Edit, Pages:Edit
 CF_WORKER=tg-challenge-bot              # имя воркера бота
 CF_KV_BINDING=CHALLENGE_KV
 
@@ -145,16 +142,10 @@ npm run pages:setup
 ### 4. Деплой
 
 ```bash
-npm run build
-CLOUDFLARE_EMAIL=$CF_AUTH_EMAIL \
-CLOUDFLARE_API_KEY=$CF_AUTH_KEY \
-CLOUDFLARE_ACCOUNT_ID=$CF_ACCOUNT_ID \
-npx wrangler@latest pages deploy dist \
-  --project-name=$PAGES_PROJECT_NAME \
-  --commit-dirty=true
+CLOUDFLARE_API_TOKEN=$CF_API_TOKEN CLOUDFLARE_ACCOUNT_ID=$CF_ACCOUNT_ID npm run pages:deploy
 ```
 
-Деплой только через `wrangler` потому что он собирает `functions/*.ts` в `_worker.js` через esbuild. Свой `scripts/pages-deploy.mjs` остался для assets-only — без functions он деплоит SPA без бэка и фронт крашится на пустых API-ответах.
+`pages:deploy` = `npm run build` + `wrangler pages deploy dist`. Только `wrangler`: он собирает `functions/*.ts` в `_worker.js`, без этого SPA уезжает без бэка и падает на каждом API-запросе.
 
 После деплоя — публичный URL `https://<project>.pages.dev`, логин по `PAGES_ADMIN_SECRET`.
 
@@ -165,10 +156,9 @@ npm run dev          # vite, /api/* проксируется на твой prod
 npm run build        # tsc + vite build
 npm run typecheck    # tsc -b --noEmit
 npm run kv:backup    # JSON-дамп KV в admin/backups/kv-<env>-<ts>.json
-npm run kv:restore   # обратная заливка из дампа
 ```
 
-`backups/` лежит в `.gitignore` — дампы остаются локально как страховка перед опасными редеплоями бота.
+`backups/` лежит в `.gitignore`: в дампе AI-ключи, дампы остаются только локально — страховка перед опасными редеплоями бота.
 
 ## KV-схема
 

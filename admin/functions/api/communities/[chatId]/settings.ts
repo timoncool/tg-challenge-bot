@@ -43,6 +43,20 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
   });
 };
 
+// Integer ranges of the schedule fields the bot reads; anything else is rejected, because a
+// non-integer value would silently switch the slot off.
+type ScheduleField = "challengeDay" | "challengeHour" | "challengeMinute" | "pollDay" | "pollHour" | "pollMinute";
+const TIME: Partial<Record<ScheduleField, [number, number]>> = {
+  challengeHour: [0, 23], challengeMinute: [0, 59], pollHour: [0, 23], pollMinute: [0, 59],
+};
+const SCHEDULE_RANGES: Record<"daily" | "weekly" | "monthly", Partial<Record<ScheduleField, [number, number]>>> = {
+  daily: TIME,
+  weekly: { ...TIME, challengeDay: [0, 6], pollDay: [0, 6] },
+  monthly: { ...TIME, challengeDay: [1, 28], pollDay: [1, 28] },
+};
+
+const isIntIn = (v: unknown, [min, max]: [number, number]) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+
 export const onRequestPatch: PagesFunction<Env> = async (ctx) => {
   const guard = await requireCommunity(ctx.env, ctx.params.chatId as string);
   if (isGuardErr(guard)) return guard.error;
@@ -55,100 +69,51 @@ export const onRequestPatch: PagesFunction<Env> = async (ctx) => {
     return json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const kv = ctx.env.CHALLENGE_KV;
-  const k = (...p: (string | number)[]) => `community:${chatId}:${p.join(":")}`;
-
-  // content mode
-  if (body.contentMode) {
-    if (!["vanilla", "medium", "nsfw"].includes(body.contentMode)) {
-      return json({ error: "contentMode must be vanilla|medium|nsfw" }, { status: 400 });
+  // Validate everything first: a rejected field must not leave the others half-saved.
+  if (body.contentMode !== undefined && !["vanilla", "medium", "nsfw"].includes(body.contentMode)) {
+    return json({ error: "contentMode must be vanilla|medium|nsfw" }, { status: 400 });
+  }
+  if (body.minSuggestionReactions !== undefined && !isIntIn(body.minSuggestionReactions, [1, 50])) {
+    return json({ error: "minSuggestionReactions: 1..50 integer" }, { status: 400 });
+  }
+  for (const t of ["daily", "weekly", "monthly"] as const) {
+    const v = body.submissionLimits?.[t];
+    if (v !== undefined && !isIntIn(v, [1, 20])) {
+      return json({ error: `submissionLimits.${t}: 1..20 integer` }, { status: 400 });
     }
-    await kv.put(k("settings", "content_mode"), JSON.stringify(body.contentMode));
+    for (const [field, value] of Object.entries(body.schedule?.[t] ?? {})) {
+      const range = SCHEDULE_RANGES[t][field as ScheduleField];
+      if (!range) return json({ error: `schedule.${t}.${field}: unknown field` }, { status: 400 });
+      if (!isIntIn(value, range)) {
+        return json({ error: `schedule.${t}.${field}: ${range[0]}..${range[1]} integer` }, { status: 400 });
+      }
+    }
   }
 
-  // accept links
+  const kv = ctx.env.CHALLENGE_KV;
+  const k = (...p: (string | number)[]) => `community:${chatId}:${p.join(":")}`;
+  const s = new AdminStorage(kv);
+
+  if (body.contentMode) {
+    await kv.put(k("settings", "content_mode"), JSON.stringify(body.contentMode));
+  }
   if (typeof body.acceptLinks === "boolean") {
     await kv.put(k("settings", "accept_links"), JSON.stringify(body.acceptLinks));
   }
-
-  // min suggestion reactions
-  if (typeof body.minSuggestionReactions === "number") {
-    const n = body.minSuggestionReactions;
-    if (n < 1 || n > 50 || !Number.isInteger(n)) {
-      return json({ error: "minSuggestionReactions: 1..50 integer" }, { status: 400 });
-    }
-    await kv.put(k("settings", "min_suggestion_reactions"), JSON.stringify(n));
+  if (body.minSuggestionReactions !== undefined) {
+    await kv.put(k("settings", "min_suggestion_reactions"), JSON.stringify(body.minSuggestionReactions));
   }
-
-  // submission limits — merge partial
   if (body.submissionLimits) {
-    const s = new AdminStorage(kv);
     const cur = await s.getSubmissionLimits(chatId);
-    for (const t of ["daily", "weekly", "monthly"] as const) {
-      const v = body.submissionLimits[t];
-      if (v !== undefined) {
-        if (!Number.isInteger(v) || v < 1 || v > 20) {
-          return json({ error: `submissionLimits.${t}: 1..20 integer` }, { status: 400 });
-        }
-        cur[t] = v;
-      }
-    }
-    await kv.put(k("settings", "submission_limits"), JSON.stringify(cur));
+    await kv.put(k("settings", "submission_limits"), JSON.stringify({ ...cur, ...body.submissionLimits }));
   }
-
-  // schedule — merge partial preserving fields the bot expects
   if (body.schedule) {
-    const s = new AdminStorage(kv);
     const cur = await s.getSchedule(chatId);
-    const merged: Record<string, any> = { ...cur };
-    for (const t of ["daily", "weekly", "monthly"] as const) {
-      const patch = body.schedule[t];
-      if (!patch) continue;
-      merged[t] = { ...merged[t], ...patch };
-
-      if (patch.challengeHour !== undefined) {
-        const h = patch.challengeHour;
-        if (h < 0 || h > 23) return json({ error: `schedule.${t}.challengeHour: 0..23` }, { status: 400 });
-      }
-      if ((patch as any).challengeMinute !== undefined) {
-        const mi = (patch as any).challengeMinute as number;
-        if (!Number.isInteger(mi) || mi < 0 || mi > 59) {
-          return json({ error: `schedule.${t}.challengeMinute: 0..59 integer` }, { status: 400 });
-        }
-      }
-      if ((patch as any).pollHour !== undefined) {
-        const h = (patch as any).pollHour as number;
-        if (!Number.isInteger(h) || h < 0 || h > 23) {
-          return json({ error: `schedule.${t}.pollHour: 0..23 integer` }, { status: 400 });
-        }
-      }
-      if ((patch as any).pollMinute !== undefined) {
-        const mi = (patch as any).pollMinute as number;
-        if (!Number.isInteger(mi) || mi < 0 || mi > 59) {
-          return json({ error: `schedule.${t}.pollMinute: 0..59 integer` }, { status: 400 });
-        }
-      }
-      if (t === "weekly" && body.schedule.weekly?.challengeDay !== undefined) {
-        const d = body.schedule.weekly.challengeDay;
-        if (d < 0 || d > 6) return json({ error: "schedule.weekly.challengeDay: 0..6" }, { status: 400 });
-      }
-      if (t === "weekly" && body.schedule.weekly?.pollDay !== undefined) {
-        const d = body.schedule.weekly.pollDay;
-        if (!Number.isInteger(d) || d < 0 || d > 6) {
-          return json({ error: "schedule.weekly.pollDay: 0..6 integer" }, { status: 400 });
-        }
-      }
-      if (t === "monthly" && body.schedule.monthly?.challengeDay !== undefined) {
-        const d = body.schedule.monthly.challengeDay;
-        if (d < 1 || d > 28) return json({ error: "schedule.monthly.challengeDay: 1..28" }, { status: 400 });
-      }
-      if (t === "monthly" && body.schedule.monthly?.pollDay !== undefined) {
-        const d = body.schedule.monthly.pollDay;
-        if (!Number.isInteger(d) || d < 1 || d > 28) {
-          return json({ error: "schedule.monthly.pollDay: 1..28 integer" }, { status: 400 });
-        }
-      }
-    }
+    const merged = {
+      daily: { ...cur.daily, ...body.schedule.daily },
+      weekly: { ...cur.weekly, ...body.schedule.weekly },
+      monthly: { ...cur.monthly, ...body.schedule.monthly },
+    };
     await kv.put(k("settings", "schedule"), JSON.stringify(merged));
   }
 

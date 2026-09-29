@@ -3,10 +3,9 @@ import { Env, json } from "../../_lib/auth";
 // Управление Cron Triggers воркера бота через Cloudflare API.
 // Это заменяет ручную раскладку scheduled messages в Telegram.
 //
-// Бот сам внутри cron'а перебирает все комьюнити и сравнивает текущий час
-// с per-community settings:schedule. Поэтому правильное расписание = "0 * * * *"
-// (раз в час). За 12 часов до challengeHour делается poll, в challengeHour
-// — start.
+// Расписание групп задаётся с точностью до минуты, поэтому боту нужен тик
+// каждую минуту: "* * * * *". Пропущенный тик бот догоняет до 55 минут, так что
+// "*/5 * * * *" тоже работает (с опозданием до 5 минут). Реже — слоты теряются.
 
 interface BotEnv extends Env {
   BOT_WORKER_NAME?: string; // default "tg-challenge-bot"

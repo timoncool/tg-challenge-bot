@@ -27,6 +27,9 @@ const DEFAULT_CONTENT_MODE = "vanilla";
 // Минимум реакций для принятия предложения темы (по умолчанию)
 const DEFAULT_MIN_SUGGESTION_REACTIONS = 3;
 
+// Output cap for theme generation; override per engine with maxTokens in the AI config.
+const AI_MAX_TOKENS = 5000;
+
 // Russian pluralization helper
 function pluralize(n, one, few, many) {
   const mod10 = Math.abs(n) % 10;
@@ -54,18 +57,6 @@ function stripHtml(text) {
   return String(text).replace(/<[^>]*>/g, "");
 }
 
-const fmt = {
-  b: (text) => `<b>${escapeHtml(text)}</b>`,
-  i: (text) => `<i>${escapeHtml(text)}</i>`,
-  u: (text) => `<u>${escapeHtml(text)}</u>`,
-  s: (text) => `<s>${escapeHtml(text)}</s>`,
-  code: (text) => `<code>${escapeHtml(text)}</code>`,
-  pre: (text) => `<pre>${escapeHtml(text)}</pre>`,
-  link: (text, url) => `<a href="${url}">${escapeHtml(text)}</a>`,
-  spoiler: (text) => `<tg-spoiler>${escapeHtml(text)}</tg-spoiler>`,
-  blockquote: (text) => `<blockquote>${escapeHtml(text)}</blockquote>`,
-};
-
 // ============================================
 // ЛОКАЛИЗАЦИЯ
 // ============================================
@@ -87,214 +78,150 @@ async function loadMessages(kv) {
     return {};
   }
 }
-// helper — pick override value or default
-function pickMsg(override, key, fallback) {
-  return override && Object.prototype.hasOwnProperty.call(override, key)
-    ? override[key] : fallback;
-}
 // helper — substitute {placeholders}
 function tpl(str, vars) {
   if (typeof str !== "string") return "";
   return str.replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? String(vars[k]) : ""));
 }
 
-// Реплики Mr. Challenger для подтверждения работ
-const submissionReactions = [
-  "✅ <b>Принято.</b> Выглядит стильно. 🍷",
-  "🎯 О, <i>интересная работа</i>. Засчитано.",
-  "👁️ Вижу. <b>Ты в деле.</b>",
-  "📸 Отличный кадр. <i>Добавил в список.</i>",
-  "✨ Достойно. <b>Участвуешь.</b>",
-  "✅ Принято. <i>Ждем оценки остальных.</i>",
-  "💾 Сохранил. <b>Выглядит качественно.</b>",
-  "🎯 Есть контакт. <i>Работа в игре.</i>",
-  "👌 Хорошо вышло. <b>Записано.</b>",
-];
-
-function getRandomReaction(override) {
-  const arr = (override && Array.isArray(override.submissionReactions) && override.submissionReactions.length)
-    ? override.submissionReactions : submissionReactions;
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-// Реплики Mr. Challenger для победителей
-const winnerPhrases = [
-  "Отличное исполнение. 🎩",
-  "Заслуженно. Браво. 👏",
-  "Мастерская работа.",
-  "Сообщество выбрало. Я согласен.",
-  "Впечатляет. Так держать.",
-  "Класс. Жду в следующем раунде.",
-  "Чистая победа. 🏆",
-  "Талант виден. Уважаю.",
-  "Сильно. Очень сильно.",
-  "Вот это уровень. 🔥",
-];
-
-function getRandomWinnerPhrase(override) {
-  const arr = (override && Array.isArray(override.winnerPhrases) && override.winnerPhrases.length)
-    ? override.winnerPhrases : winnerPhrases;
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-const ru = {
-  challengeTypes: {
+// ============================================
+// DEFAULT TEXTS — everything the bot writes in the chat that the admin panel can override
+// (settings:messages, same keys). The public template worker.js is this file with the block
+// below replaced by template/texts.js: `node scripts/build-template.mjs`.
+// ============================================
+// <texts>
+const DEFAULT_TEXTS = {
+  // Реплики Mr. Challenger при принятии работы (случайная)
+  submissionReactions: [
+    "✅ <b>Принято.</b> Выглядит стильно. 🍷",
+    "🎯 О, <i>интересная работа</i>. Засчитано.",
+    "👁️ Вижу. <b>Ты в деле.</b>",
+    "📸 Отличный кадр. <i>Добавил в список.</i>",
+    "✨ Достойно. <b>Участвуешь.</b>",
+    "✅ Принято. <i>Ждем оценки остальных.</i>",
+    "💾 Сохранил. <b>Выглядит качественно.</b>",
+    "🎯 Есть контакт. <i>Работа в игре.</i>",
+    "👌 Хорошо вышло. <b>Записано.</b>",
+  ],
+  // Реплики Mr. Challenger победителю (случайная, {phrase})
+  winnerPhrases: [
+    "Отличное исполнение. 🎩",
+    "Заслуженно. Браво. 👏",
+    "Мастерская работа.",
+    "Сообщество выбрало. Я согласен.",
+    "Впечатляет. Так держать.",
+    "Класс. Жду в следующем раунде.",
+    "Чистая победа. 🏆",
+    "Талант виден. Уважаю.",
+    "Сильно. Очень сильно.",
+    "Вот это уровень. 🔥",
+  ],
+  challengeTypeTitles: {
     daily: "⚡ Челлендж дня",
     weekly: "🎩 Челлендж недели",
     monthly: "👑 Челлендж месяца",
   },
-  pollQuestion: (type) => {
-    return `Время выбора. Какую тему возьмем в работу?`;
+  pollQuestion: "Время выбора. Какую тему возьмем в работу?",
+  challengeAnnouncementTitles: {
+    daily: "⚡ ЧЕЛЛЕНДЖ ДНЯ",
+    weekly: "🎩 ЧЕЛЛЕНДЖ НЕДЕЛИ",
+    monthly: "👑 ЧЕЛЛЕНДЖ МЕСЯЦА",
   },
-  // HTML formatted challenge announcement - Mr. Challenger style
-  challengeAnnouncement: (type, topic, startDate, endDate, voteCount = 0) => {
-    const titles = {
-      daily: "⚡ ЧЕЛЛЕНДЖ ДНЯ",
-      weekly: "🎩 ЧЕЛЛЕНДЖ НЕДЕЛИ",
-      monthly: "👑 ЧЕЛЛЕНДЖ МЕСЯЦА",
-    };
-    const voteLine = voteCount > 0 ? ` (${voteCount} голосов)` : "";
-
-    return `<b>${titles[type]}</b>
-
-Тема выбрана${voteLine}.
-Прием работ открыт до ${endDate}.
-
-💎 <b>ЗАДАНИЕ:</b>
-${topic}
-
-Жду ваши работы в этом треде.
-Ценим стиль, идею и качество исполнения.
-
-<i>/stats · /leaderboard · /current</i>`;
-  },
-  // Winner announcement - Mr. Challenger style
-  winnerAnnouncementFull: (username, score, type, topic) => {
-    return `🏆 <b>ЛУЧШАЯ РАБОТА</b>
-
-Автор: ${escapeHtml(username)}
-Оценка сообщества: <b>${score}</b> ✨
-
-<i>Тема была: ${stripHtml(topic)}</i>
-${getRandomWinnerPhrase()}`;
-  },
-  winnerAnnouncement: (username, score, type) => {
-    return `🥂 <b>ПОБЕДИТЕЛЬ</b>
-
-${escapeHtml(username)} забирает этот раунд.
-Результат: <b>${score}</b> голосов.
-
-${getRandomWinnerPhrase()}`;
-  },
+  // {title} {voteLine} {topic} {startDate} {endDate}
+  challengeAnnouncementTemplate: "<b>{title}</b>\n\nТема выбрана{voteLine}.\nПрием работ открыт до {endDate}.\n\n💎 <b>ЗАДАНИЕ:</b>\n{topic}\n\nЖду ваши работы в этом треде.\nЦеним стиль, идею и качество исполнения.\n\n<i>/stats · /leaderboard · /current</i>",
+  // {username} {score} {votes} {phrase}
+  winnerAnnouncementTemplate: "🥂 <b>ПОБЕДИТЕЛЬ</b>\n\n{username} забирает этот раунд.\nРезультат: <b>{votes}</b>.\n\n{phrase}",
+  // {username} {score} {votes} {topic} {phrase}
+  winnerAnnouncementFullTemplate: "🏆 <b>ЛУЧШАЯ РАБОТА</b>\n\nАвтор: {username}\nОценка сообщества: <b>{score}</b> ✨\n\n<i>Тема была: {topic}</i>\n{phrase}",
   noSubmissions: "🤔 <i>Тишина? Жаль. Надеюсь, вы копите силы для следующего раза.</i>",
-  submissionLimitReached: (current, max) => {
-    const workWord = pluralize(current, "работу", "работы", "работ");
-    const maxWord = pluralize(max, "работа", "работы", "работ");
-    return `⚠️ Уже <b>${current}</b> ${workWord} в игре. Максимум — <b>${max}</b> ${maxWord}. Терпение.`;
+  noVotes: "🤷 <i>Работы есть, а голосов нет. В этот раз без победителя.</i>",
+  // {current} {max} {workWord} {maxWord}
+  submissionLimitReached: "⚠️ Уже <b>{current}</b> {workWord} в игре. Максимум — <b>{max}</b> {maxWord}. Терпение.",
+  // {label}
+  leaderboardTitle: "📜 <b>Рейтинг лучших авторов ({label})</b>",
+  leaderboardLabels: {
+    daily: "по дням",
+    weekly: "за неделю",
+    monthly: "за месяц",
   },
-  workAccepted: (current, max) => {
-    if (max === 1) return getRandomReaction();
-    return `${getRandomReaction()} (${current}/${max})`;
-  },
-  leaderboardTitle: (type) => {
-    const labels = {
-      daily: "по дням",
-      weekly: "за неделю",
-      monthly: "за месяц",
-    };
-    return `📜 <b>Рейтинг лучших авторов (${labels[type]})</b>`;
-  },
-  helpMessage: (schedule) => {
-    const fmtSched = formatSchedule(schedule);
-    return `<b>Приветствую. Я Mr. Challenger.</b>
-Курирую творческие соревнования в этом чате.
-
-<b>Как это работает:</b>
-1. Выбираем тему
-2. Вы публикуете работы
-3. Сообщество выбирает лучших реакциями
-
-<b>Расписание:</b>
-• Дневные — ${fmtSched.daily}
-• Недельные — ${fmtSched.weekly}
-• Месячные — ${fmtSched.monthly}
-
-<b>Команды:</b>
-/current — статус челленджей
-/stats — ваша статистика
-/leaderboard — рейтинг победителей
-/suggest — предложить тему
-
-<i>Удачи в челленджах. 🍷</i>`;
-  },
+  // {dailySched} {weeklySched} {monthlySched}
+  helpMessage: "<b>Приветствую. Я Mr. Challenger.</b>\nКурирую творческие соревнования в этом чате.\n\n<b>Как это работает:</b>\n1. Выбираем тему\n2. Вы публикуете работы\n3. Сообщество выбирает лучших реакциями\n\n<b>Расписание:</b>\n• Дневные — {dailySched}\n• Недельные — {weeklySched}\n• Месячные — {monthlySched}\n\n<b>Команды:</b>\n/current — статус челленджей\n/stats — ваша статистика\n/leaderboard — рейтинг победителей\n/suggest — предложить тему\n\n<i>Удачи в челленджах. 🍷</i>",
 };
+// </texts>
 
 // ============================================
-// MESSAGE HELPERS — берут override из KV (settings:messages) или дефолты
+// MESSAGE HELPERS — override from KV (settings:messages) or DEFAULT_TEXTS
 // ============================================
+function pickText(override, key) {
+  return override && Object.prototype.hasOwnProperty.call(override, key) ? override[key] : DEFAULT_TEXTS[key];
+}
+function pickRandom(override, key) {
+  const own = pickText(override, key);
+  const list = Array.isArray(own) && own.length ? own : DEFAULT_TEXTS[key];
+  return list[Math.floor(Math.random() * list.length)];
+}
+function votesText(n) {
+  return `${n} ${pluralize(n, "голос", "голоса", "голосов")}`;
+}
 function msgWorkAccepted(override, current, max) {
-  if (max === 1) return getRandomReaction(override);
-  return `${getRandomReaction(override)} (${current}/${max})`;
+  const reaction = pickRandom(override, "submissionReactions");
+  return max === 1 ? reaction : `${reaction} (${current}/${max})`;
 }
 function msgSubmissionLimit(override, current, max) {
-  const workWord = pluralize(current, "работу", "работы", "работ");
-  const maxWord = pluralize(max, "работа", "работы", "работ");
-  const tmpl = pickMsg(override, "submissionLimitReached",
-    "⚠️ Уже <b>{current}</b> {workWord} в игре. Максимум — <b>{max}</b> {maxWord}. Терпение.");
-  return tpl(tmpl, { current, max, workWord, maxWord });
+  return tpl(pickText(override, "submissionLimitReached"), {
+    current,
+    max,
+    workWord: pluralize(current, "работу", "работы", "работ"),
+    maxWord: pluralize(max, "работа", "работы", "работ"),
+  });
 }
 function msgNoSubmissions(override) {
-  return pickMsg(override, "noSubmissions",
-    "🤔 <i>Тишина? Жаль. Надеюсь, вы копите силы для следующего раза.</i>");
+  return pickText(override, "noSubmissions");
+}
+function msgNoVotes(override) {
+  return pickText(override, "noVotes");
+}
+function msgChallengeTypeTitle(override, type) {
+  return pickText(override, "challengeTypeTitles")?.[type] || DEFAULT_TEXTS.challengeTypeTitles[type] || type;
 }
 function msgWinnerAnnouncement(override, username, score) {
-  const tmpl = pickMsg(override, "winnerAnnouncementTemplate",
-    "🥂 <b>ПОБЕДИТЕЛЬ</b>\n\n{username} забирает этот раунд.\nРезультат: <b>{score}</b> голосов.\n\n{phrase}");
-  return tpl(tmpl, { username: escapeHtml(username), score, phrase: getRandomWinnerPhrase(override) });
+  return tpl(pickText(override, "winnerAnnouncementTemplate"), {
+    username: escapeHtml(username), score, votes: votesText(score), phrase: pickRandom(override, "winnerPhrases"),
+  });
 }
 function msgWinnerAnnouncementFull(override, username, score, topic) {
-  const tmpl = pickMsg(override, "winnerAnnouncementFullTemplate",
-    "🏆 <b>ЛУЧШАЯ РАБОТА</b>\n\nАвтор: {username}\nОценка сообщества: <b>{score}</b> ✨\n\n<i>Тема была: {topic}</i>\n{phrase}");
-  return tpl(tmpl, {
-    username: escapeHtml(username), score, topic: stripHtml(topic),
-    phrase: getRandomWinnerPhrase(override),
+  return tpl(pickText(override, "winnerAnnouncementFullTemplate"), {
+    username: escapeHtml(username), score, votes: votesText(score), topic: escapeHtml(topic),
+    phrase: pickRandom(override, "winnerPhrases"),
   });
 }
 function msgChallengeAnnouncement(override, type, topic, startDate, endDate, voteCount) {
-  const titles = pickMsg(override, "challengeAnnouncementTitles", {
-    daily: "⚡ ЧЕЛЛЕНДЖ ДНЯ", weekly: "🎩 ЧЕЛЛЕНДЖ НЕДЕЛИ", monthly: "👑 ЧЕЛЛЕНДЖ МЕСЯЦА",
+  const title = pickText(override, "challengeAnnouncementTitles")?.[type] || DEFAULT_TEXTS.challengeAnnouncementTitles[type];
+  return tpl(pickText(override, "challengeAnnouncementTemplate"), {
+    title,
+    voteLine: voteCount > 0 ? ` (${votesText(voteCount)})` : "",
+    topic: escapeHtml(topic),
+    startDate,
+    endDate,
   });
-  const voteLine = voteCount > 0 ? ` (${voteCount} голосов)` : "";
-  const tmpl = pickMsg(override, "challengeAnnouncementTemplate",
-    "<b>{title}</b>\n\nТема выбрана{voteLine}.\nПрием работ открыт до {endDate}.\n\n💎 <b>ЗАДАНИЕ:</b>\n{topic}\n\nЖду ваши работы в этом треде.\nЦеним стиль, идею и качество исполнения.\n\n<i>/stats · /leaderboard · /current</i>");
-  return tpl(tmpl, { title: titles[type] || titles.daily, voteLine, topic, endDate, startDate });
 }
 function msgPollQuestion(override) {
-  return pickMsg(override, "pollQuestion", "Время выбора. Какую тему возьмем в работу?");
+  return pickText(override, "pollQuestion");
 }
 function msgLeaderboardTitle(override, type) {
-  const labels = pickMsg(override, "leaderboardLabels", { daily: "по дням", weekly: "за неделю", monthly: "за месяц" });
-  const tmpl = pickMsg(override, "leaderboardTitle", "📜 <b>Рейтинг лучших авторов ({label})</b>");
-  return tpl(tmpl, { label: labels[type] || type });
+  const label = pickText(override, "leaderboardLabels")?.[type] || DEFAULT_TEXTS.leaderboardLabels[type] || type;
+  return tpl(pickText(override, "leaderboardTitle"), { label });
 }
 function msgHelp(override, schedule) {
-  const fmtSched = formatSchedule(schedule);
-  const tmpl = pickMsg(override, "helpMessage",
-    "<b>Приветствую. Я Mr. Challenger.</b>\nКурирую творческие соревнования в этом чате.\n\n<b>Как это работает:</b>\n1. Выбираем тему\n2. Вы публикуете работы\n3. Сообщество выбирает лучших реакциями\n\n<b>Расписание:</b>\n• Дневные — {dailySched}\n• Недельные — {weeklySched}\n• Месячные — {monthlySched}\n\n<b>Команды:</b>\n/current — статус челленджей\n/stats — ваша статистика\n/leaderboard — рейтинг победителей\n/suggest — предложить тему\n\n<i>Удачи в челленджах. 🍷</i>");
-  return tpl(tmpl, { dailySched: fmtSched.daily, weeklySched: fmtSched.weekly, monthlySched: fmtSched.monthly });
+  const sched = formatSchedule(schedule);
+  return tpl(pickText(override, "helpMessage"), {
+    dailySched: sched.daily, weeklySched: sched.weekly, monthlySched: sched.monthly,
+  });
 }
 
 // ============================================
 // КОНФИГУРАЦИЯ (MULTI-COMMUNITY)
 // ============================================
-
-// Глобальные настройки из env (не привязаны к сообществу)
-function getGlobalConfig(env) {
-  return {
-    timezoneOffset: parseInt(env.TIMEZONE_OFFSET, 10) || 0,
-    language: env.BOT_LANGUAGE || "ru",
-  };
-}
 
 // ============================================
 // УПРАВЛЕНИЕ СООБЩЕСТВАМИ
@@ -413,21 +340,11 @@ function getLegacyConfig(env) {
 async function getConfigForChat(env, storage, chatId) {
   // Сначала пробуем KV
   const communityConfig = await getCommunityConfig(storage, chatId);
-  if (communityConfig) {
-    return {
-      ...getGlobalConfig(env),
-      ...communityConfig,
-    };
-  }
+  if (communityConfig) return communityConfig;
 
   // Fallback на legacy env config
   const legacyConfig = getLegacyConfig(env);
-  if (legacyConfig && legacyConfig.chatId === chatId) {
-    return {
-      ...getGlobalConfig(env),
-      ...legacyConfig,
-    };
-  }
+  if (legacyConfig && legacyConfig.chatId === chatId) return legacyConfig;
 
   return null;
 }
@@ -464,10 +381,7 @@ async function getAllActiveCommunities(env, storage) {
   // Добавляем legacy если не дублируется
   const legacyConfig = getLegacyConfig(env);
   if (legacyConfig && legacyConfig.chatId && !communities[String(legacyConfig.chatId)]) {
-    result.push({
-      ...getGlobalConfig(env),
-      ...legacyConfig,
-    });
+    result.push(legacyConfig);
   }
 
   return result;
@@ -500,11 +414,11 @@ async function setSchedule(storage, chatId, schedule) {
 // Format schedule for display
 function formatSchedule(schedule) {
   const dayNames = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
-  const formatHour = (h) => `${h}:00`;
+  const time = (s) => `${s.challengeHour}:${String(s.challengeMinute ?? 0).padStart(2, "0")} UTC`;
 
-  const daily = `каждый день в ${formatHour(schedule.daily.challengeHour)}`;
-  const weekly = `${dayNames[schedule.weekly.challengeDay]} в ${formatHour(schedule.weekly.challengeHour)}`;
-  const monthly = `${schedule.monthly.challengeDay}-го числа в ${formatHour(schedule.monthly.challengeHour)}`;
+  const daily = `каждый день в ${time(schedule.daily)}`;
+  const weekly = `${dayNames[schedule.weekly.challengeDay]} в ${time(schedule.weekly)}`;
+  const monthly = `${schedule.monthly.challengeDay}-го числа в ${time(schedule.monthly)}`;
 
   return { daily, weekly, monthly };
 }
@@ -533,7 +447,13 @@ class TelegramAPI {
           body: JSON.stringify(params),
         });
 
-        const data = await response.json();
+        let data;
+        try {
+          data = await response.json();
+        } catch {
+          // An HTML error page from a proxy in front of Telegram: transient, retried below.
+          throw new Error(`HTTP ${response.status}: not a Telegram API response`);
+        }
 
         if (!data.ok) {
           const errorCode = data.error_code;
@@ -572,8 +492,8 @@ class TelegramAPI {
         return data.result;
       } catch (e) {
         lastError = e;
-        // Don't retry non-network errors
-        if (e instanceof SyntaxError || e.message?.startsWith("[4")) {
+        // Client errors are final; network and server errors are retried.
+        if (e.message?.startsWith("[4")) {
           throw e;
         }
         if (attempt < retries - 1) {
@@ -594,12 +514,17 @@ class TelegramAPI {
   }
 
   async sendMessage(chatId, text, options = {}) {
-    // Truncate if too long (Telegram limit 4096)
+    // Telegram limit is 4096. Cut at a line break: tags never span lines in these messages,
+    // so the HTML stays well-formed and the message is not rejected as a whole.
     if (text.length > 4096) {
       console.warn(`Message too long (${text.length}), truncating`);
-      text = text.substring(0, 4093) + "...";
+      const cut = text.lastIndexOf("\n", 4090);
+      text = text.substring(0, cut > 0 ? cut : 4090) + "\n…";
     }
-    return this.request("sendMessage", { chat_id: chatId, text, ...options });
+    // A deleted target (e.g. the winning work) must not make the whole message fail.
+    const { reply_to_message_id: replyTo, ...rest } = options;
+    if (replyTo) rest.reply_parameters = { message_id: replyTo, allow_sending_without_reply: true };
+    return this.request("sendMessage", { chat_id: chatId, text, ...rest });
   }
 
   async sendHtml(chatId, text, options = {}) {
@@ -668,16 +593,58 @@ class TelegramAPI {
   async setWebhook(url, secret = null) {
     const params = {
       url,
-      allowed_updates: [
-        "message",
-        "message_reaction",
-        "poll",
-        "poll_answer",
-      ],
+      allowed_updates: WEBHOOK_ALLOWED_UPDATES,
+      max_connections: WEBHOOK_MAX_CONNECTIONS,
     };
     if (secret) params.secret_token = secret;
     return this.request("setWebhook", params);
   }
+
+  async getWebhookInfo() {
+    return this.request("getWebhookInfo");
+  }
+}
+
+// Telegram keeps allowed_updates and max_connections from the last setWebhook call.
+const WEBHOOK_ALLOWED_UPDATES = ["message", "message_reaction", "poll"];
+// One update at a time: handlers read-modify-write shared KV values (submissions, reactions,
+// suggestions), and parallel deliveries would overwrite each other's writes.
+const WEBHOOK_MAX_CONNECTIONS = 1;
+
+let webhookChecked = false;
+
+/** A redeploy does not touch the webhook registration; bring it in line once per isolate. */
+async function ensureWebhookConfig(env, tg) {
+  if (webhookChecked) return;
+  webhookChecked = true;
+  try {
+    const info = await tg.getWebhookInfo();
+    if (!info?.url) return;
+    const allowed = info.allowed_updates || [];
+    const upToDate = info.max_connections === WEBHOOK_MAX_CONNECTIONS
+      && WEBHOOK_ALLOWED_UPDATES.every((u) => allowed.includes(u));
+    if (upToDate) return;
+    await tg.setWebhook(info.url, env.WEBHOOK_SECRET || null);
+    console.log("Webhook re-registered:", { allowed_updates: WEBHOOK_ALLOWED_UPDATES, max_connections: WEBHOOK_MAX_CONNECTIONS });
+  } catch (e) {
+    webhookChecked = false;
+    console.error("ensureWebhookConfig failed:", e.message);
+  }
+}
+
+let botUsername = null;
+
+/** With privacy mode off the bot also sees `/command@other_bot`; those are not ours. */
+async function isAddressedToUs(tg, addressee) {
+  if (!botUsername) {
+    try {
+      botUsername = (await tg.request("getMe")).username || "";
+    } catch (e) {
+      console.error("getMe failed, treating the command as ours:", e.message);
+      return true;
+    }
+  }
+  return addressee.toLowerCase() === botUsername.toLowerCase();
 }
 
 // ============================================
@@ -790,13 +757,16 @@ class Storage {
     await this.set(this._key(chatId, "challenge", challenge.type), challenge, options);
   }
 
+  // YYYYMMDD + 3 random digits. Submissions and reactions are keyed by this id, so a second
+  // challenge of the same type on the same day must not land on an id that already has data.
   async getNextChallengeId(chatId, type) {
-    // Use timestamp-based ID to avoid race conditions
-    // Format: YYYYMMDD + random suffix (chatId reserved for future per-community sequences)
     const now = new Date();
-    const datePrefix = now.getFullYear() * 10000 + (now.getMonth() + 1) * 100 + now.getDate();
-    const randomSuffix = Math.floor(Math.random() * 1000);
-    return datePrefix * 1000 + randomSuffix;
+    const datePrefix = now.getUTCFullYear() * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const id = datePrefix * 1000 + Math.floor(Math.random() * 1000);
+      if ((await this.getSubmissions(chatId, type, id)).length === 0) return id;
+    }
+    throw new Error(`no free ${type} challenge id for ${datePrefix}`);
   }
 
   // Poll (per-community)
@@ -811,6 +781,20 @@ class Storage {
 
   async deletePoll(chatId, type) {
     await this.delete(this._key(chatId, "poll", type));
+  }
+
+  // Telegram `poll` updates carry only the poll id — this maps it back to the community.
+  async indexPoll(pollId, chatId, type) {
+    await this.set(`poll_index:${pollId}`, { chatId, type }, { expirationTtl: TTL.POLLS });
+  }
+
+  async getPollRef(pollId) {
+    return this.get(`poll_index:${pollId}`);
+  }
+
+  // Live vote counts, shown by the admin dashboard.
+  async setPollVotes(chatId, type, votes) {
+    await this.set(this._key(chatId, "poll_votes", type), votes, { expirationTtl: TTL.POLLS });
   }
 
   // Cron slots already fired for this community: { "poll:daily": <slot ms>, … }
@@ -939,18 +923,11 @@ class Storage {
     return (await this.get(this._key(chatId, "theme_history", type))) || [];
   }
 
-  async addThemeToHistory(chatId, type, theme) {
-    const history = await this.getThemeHistory(chatId, type);
-    history.unshift(theme);
-    // Храним последние 100 тем для исключения повторов
-    await this.set(this._key(chatId, "theme_history", type), history.slice(0, 50));
-  }
-
-  // Массовое добавление тем (все варианты опроса)
+  // The last 50 themes are sent to the AI as "do not repeat".
   async addThemesToHistory(chatId, type, themes) {
-    const history = await this.getThemeHistory(chatId, type);
-    const lowerHistory = history.map(t => t.toLowerCase());
-    const newThemes = themes.filter(t => !lowerHistory.includes(t.toLowerCase()));
+    const history = (await this.getThemeHistory(chatId, type)).filter((t) => typeof t === "string");
+    const lowerHistory = history.map((t) => t.toLowerCase());
+    const newThemes = themes.filter((t) => !lowerHistory.includes(t.toLowerCase()));
     history.unshift(...newThemes);
     await this.set(this._key(chatId, "theme_history", type), history.slice(0, 50));
   }
@@ -1121,8 +1098,7 @@ class Storage {
 // AI SERVICE (multi-provider: gemini / openai-compatible)
 // ============================================
 
-// AI конфиг из env: AI_PROVIDER, AI_API_URL, AI_API_KEY, AI_MODEL
-// LEGACY — оставлен как fallback. Основной путь — loadEffectiveAiConfig.
+// Env AI config (AI_PROVIDER, AI_API_URL, AI_API_KEY, AI_MODEL) — last resort after KV.
 function getAiConfigFromEnv(env) {
   return {
     provider: env.AI_PROVIDER,
@@ -1130,10 +1106,6 @@ function getAiConfigFromEnv(env) {
     apiKey: env.AI_API_KEY,
     model: env.AI_MODEL,
   };
-}
-// Backward-compat shim — старый код вызывает getAiConfig(env).
-function getAiConfig(env) {
-  return getAiConfigFromEnv(env);
 }
 
 // Запись AI-попытки в:
@@ -1184,13 +1156,14 @@ async function logAiAttempt(kv, chatId, entry) {
 }
 
 // Обёртка над generateThemes с логированием в KV.
-async function generateThemesLogged(aiConfig, type, language, previousThemes, contentMode, kv, chatId) {
+async function generateThemesLogged(aiConfig, type, previousThemes, contentMode, kv, chatId) {
   const startedAt = Date.now();
   try {
-    const themes = await generateThemes(aiConfig, type, language, previousThemes, contentMode);
+    const themes = await generateThemes(aiConfig, type, previousThemes, contentMode, await loadPromptOverrides(kv));
     const usage = themes._usage || {};
     await logAiAttempt(kv, chatId, {
-      provider: aiConfig.provider, model: aiConfig.model, source: aiConfig.source,
+      provider: aiConfig.provider, model: aiConfig.model, resolvedModel: usage.resolvedModel ?? null,
+      source: aiConfig.source,
       type, contentMode, durationMs: Date.now() - startedAt,
       success: true, themesCount: Array.isArray(themes) ? themes.length : 0,
       prompt_tokens: usage.prompt_tokens ?? null,
@@ -1213,273 +1186,234 @@ async function generateThemesLogged(aiConfig, type, language, previousThemes, co
 //   community override (community:{chatId}:settings:ai) > global (settings:ai:global) > env (legacy)
 // Управляется из админки tg-challenge-bot-admin без redeploy воркера.
 async function loadEffectiveAiConfig(env, kv, chatId = null) {
-  const tryConfig = async (key) => {
+  // A stored config missing a field is skipped, and the skip is named in `source`,
+  // which the AI log and the admin's AI Stats show.
+  const skipped = [];
+  const tryConfig = async (key, label) => {
     try {
       const cfg = await kv.get(key, "json");
       if (!cfg) return null;
-      const missing = [];
-      if (!cfg.apiKey) missing.push("apiKey");
-      if (!cfg.provider) missing.push("provider");
-      if (!cfg.apiUrl) missing.push("apiUrl");
-      if (!cfg.model) missing.push("model");
+      const missing = AI_CONFIG_FIELDS.filter((f) => !cfg[f]);
       if (missing.length === 0) return cfg;
-      // Invalid stored cfg — log and fall through. Without this it silently uses env.
-      console.warn(`loadEffectiveAiConfig: ${key} exists but invalid (missing: ${missing.join(",")}) — falling through`);
+      console.warn(`loadEffectiveAiConfig: ${key} is incomplete (missing: ${missing.join(",")})`);
+      skipped.push(`${label}: нет ${missing.join(", ")}`);
     } catch (e) {
       console.error(`loadEffectiveAiConfig: kv.get(${key}) failed:`, e.message);
+      skipped.push(`${label}: ${e.message}`);
     }
     return null;
   };
+  const pick = (cfg, source) => ({
+    provider: cfg.provider, apiUrl: cfg.apiUrl, apiKey: cfg.apiKey,
+    model: cfg.model, temperature: cfg.temperature, maxTokens: cfg.maxTokens,
+    referer: cfg.referer, title: cfg.title,
+    source: skipped.length ? `${source} (пропущен ${skipped.join("; ")})` : source,
+  });
 
-  // 1) per-community override
   if (chatId) {
-    const perCommunity = await tryConfig(`community:${chatId}:settings:ai`);
-    if (perCommunity) {
-      return {
-        provider: perCommunity.provider, apiUrl: perCommunity.apiUrl, apiKey: perCommunity.apiKey,
-        model: perCommunity.model, temperature: perCommunity.temperature,
-        referer: perCommunity.referer, title: perCommunity.title,
-        source: "kv:community",
-      };
-    }
+    const own = await tryConfig(`community:${chatId}:settings:ai`, "конфиг сообщества");
+    if (own) return pick(own, "kv:community");
   }
-
-  // 2) global
-  const global_ = await tryConfig("settings:ai:global");
-  if (global_) {
-    return {
-      provider: global_.provider, apiUrl: global_.apiUrl, apiKey: global_.apiKey,
-      model: global_.model, temperature: global_.temperature,
-      referer: global_.referer, title: global_.title,
-      source: "kv:global",
-    };
-  }
-
-  // 3) env fallback
-  return { ...getAiConfigFromEnv(env), source: "env" };
+  const global_ = await tryConfig("settings:ai:global", "global-конфиг");
+  if (global_) return pick(global_, "kv:global");
+  return pick(getAiConfigFromEnv(env), "env");
 }
 
-// aiConfig: { provider, apiUrl, apiKey, model }
-// provider "gemini" → Google Generative Language API
-// provider "openai" → OpenAI-compatible (GLM, OpenAI, Groq, etc.)
-async function generateThemes(aiConfig, type, language = "ru", previousThemes = [], contentMode = "vanilla") {
-  const { provider, apiUrl, apiKey, model } = aiConfig;
-  const typeNames = { daily: "ДНЕВНОГО", weekly: "НЕДЕЛЬНОГО", monthly: "МЕСЯЧНОГО" };
-  const typeName = typeNames[type] || "ДНЕВНОГО";
+const AI_CONFIG_FIELDS = ["provider", "apiUrl", "apiKey", "model"];
 
-  // Corpus примеров для каждого режима
-  const corpus = {
-    vanilla: [
-      // Персонажи
-      "Сейлор Мун", "Велма Динкли (Scooby-Doo)", "Спящая красавица", "Галадриэль (LoTR)",
-      "Мардж Симпсон", "Лея Органа (ЗВ)", "Татьяна Ларина", "Фа Мулан", "Барби",
-      "На'ви (Avatar)", "Дриада", "Ромео и Джульетта", "Зубная фея", "мама Дяди Фёдора",
-      "Рапунцель", "Мэри Поппинс", "Алиса в стране чудес", "Белоснежка", "Покахонтас",
-      "Тоторо и девочка", "Кики (Ведьмина служба доставки)", "Наруто (женская версия)",
-      // Ситуации/моменты
-      "только проснулась", "с подарком", "на рыбалке", "с букетом", "будущие мамы",
-      "переезд", "первый снег", "урожай", "сбор грибов", "на велосипеде",
-      "танец под дождём", "запуск воздушных змеев", "плетение венков", "прогулка с собакой",
-      "примерка шляпок", "завтрак на террасе", "запуск фонариков в небо", "рисование на пленэре",
-      "сбор ягод", "катание на коньках", "утренняя пробежка", "письмо от руки",
-      "ожидание весны", "кормление лебедей", "танцы босиком", "прыжок в воду",
-      "уроки музыки", "фотосессия", "первый день лета", "генеральная уборка",
-      "читает на подоконнике", "качается на качелях", "поёт в душе", "собирает пазл",
-      // Места/пейзажи/локации
-      "яблоневый сад", "в городском парке", "домик в деревне", "водопад", "море",
-      "среди берёз", "на мосту", "летнее кафе", "в музее", "на закате",
-      "оранжерея", "маяк на скале", "крыша многоэтажки", "японский сад", "старый чердак",
-      "набережная", "горное озеро", "лавандовое поле", "зимний парк", "ботанический сад",
-      "крыльцо старого дома", "мансарда", "тропинка в лесу", "песчаный берег",
-      "качели во дворе", "винтажная карусель", "вагон поезда", "книжная лавка",
-      "старая беседка", "рыночная площадь", "лесная поляна", "причал",
-      // Стили/эстетика
-      "кадр из ч/б фильма", "Гжель", "urban photo", "Акварель", "импрессионизм",
-      "арт-нуво", "ретро 60-х", "пастельные тона", "поп-арт", "витражи",
-      "фреска", "мозаика", "графика тушью", "минимализм", "сказочная иллюстрация",
-      "силуэт на закате", "пинап 50-х", "советский плакат", "лубок",
-      // Материалы/текстуры/объекты
-      "бабочки", "белые розы", "лилии", "одуванчик", "подснежники", "мягкая игрушка",
-      "кружево", "перья павлина", "стеклянные шары", "зеркала", "нитки и клубки",
-      "ракушки", "янтарь", "сухоцветы", "воздушные шары", "бумажные фонарики",
-      "жемчуг", "шёлк", "фарфоровые чашки", "старые ключи", "свечи", "ленты в волосах",
-      "мыльные пузыри", "акварельные краски", "перо и чернила", "калейдоскоп",
-      // Типажи/образы
-      "балерина", "актриса", "археолог", "морячка", "стюардесса", "химик",
-      "наездница", "Пастушка", "княгиня", "царевна", "сомелье", "проводница",
-      "садовница", "пианистка", "фотограф", "библиотекарь", "цветочница",
-      "кондитер", "ткачиха", "гончар", "скрипачка", "лесничая", "почтальон",
-      "художница", "медсестра (винтаж)", "парикмахер", "француженка",
-      // Прочее
-      "Африка", "Холи - праздник красок", "близняшки", "веснушки", "очень длинные волосы",
-      "альбиносы", "косы и косички", "в очках", "голубоглазая", "джинсовая одежда",
-      "в рубашке", "в балетной пачке", "радуга", "йога", "теннис", "физкультура",
-      "русские сказки", "дракон", "лебедь", "дельфин", "журавли", "12 месяцев",
-      "алые паруса", "Статуя Свободы", "вышивка", "олимпийская грация", "индейцы Америки",
-      // Дополнительные
-      "варенье", "глинтвейн", "открытка", "ветряная мельница", "облака",
-      "гамак", "снежинки", "утренний туман", "осенние листья", "черешня",
-      "пруд с кувшинками", "старое пианино", "песочные часы"
-    ],
-    medium: [
-      // Персонажи
-      "Эйприл О'Нил (TMNT)", "Невеста Франкенштейна", "Гермиона Грейнджер",
-      "Лара Крофт", "Рыжая Соня", "Женщина-кошка", "Харли Квинн", "Wednesday Addams",
-      "Трисс Меригольд", "Тринити (The Matrix)", "Claire Redfield", "Джинкс/Jinx",
-      "Маления (Elden Ring)", "Принцесса Мононоке", "Ван Хельсинг (женская версия)",
-      "Садако Ямамура", "Зорро", "Яутжа (Predator)", "Йеннифэр (Ведьмак)",
-      "Элой (Horizon)", "Сара Коннор", "Фуриоса (Mad Max)", "Баффи",
-      "Мотоко Кусанаги (Ghost in the Shell)", "Рей (Star Wars)", "Бэла Димитреску",
-      "Сэлин (Underworld)", "Эовин (LoTR)", "Электра", "Гамора",
-      // Ситуации/моменты
-      "сбежавшая невеста", "играющая с огнём", "идет ночью одна", "катастрофа",
-      "похищенная пришельцами", "воскрешение", "первый контакт", "паника",
-      "последний рубеж", "побег из крепости", "засада в переулке", "охота на ведьм",
-      "ритуал пробуждения", "кораблекрушение", "дуэль на мечах", "ночная погоня",
-      "предательство союзника", "блуждание в лабиринте", "пробуждение древнего зла",
-      "осада замка", "бой в метро", "казнь на рассвете", "тайная встреча",
-      "жертвоприношение", "перемирие", "допрос пленника", "побег из матрицы",
-      "прыжок веры", "танец с мёртвыми", "вызов демона", "прощальный поцелуй",
-      // Места/пейзажи/локации
-      "в заброшенном доме", "необитаемый остров", "долина смерти", "руины древнего города",
-      "Колизей", "на краю света", "фэнтези таверна", "Индия", "прогулка по Луне",
-      "подземный бункер", "затопленный город", "лаборатория безумного учёного",
-      "тронный зал", "ледяная пещера", "кладбище кораблей", "заброшенная станция метро",
-      "вершина вулкана", "тёмный лес", "замок на скале", "подводный храм",
-      "Чернобыль", "мёртвый город", "крепость в горах", "болота", "катакомбы",
-      "арена", "заброшенный цирк", "плавучий рынок", "маяк в шторм",
-      "пустыня из костей", "башня мага", "мост между мирами",
-      // Стили/эстетика/мэшапы
-      "Средневековый Киберпанк", "японская гравюра", "Славянское фэнтези",
-      "Техноведьма (steampunk)", "sci-fi, анабиоз", "в стиле милитари",
-      "нуар", "готика", "тёмное барокко", "биомеханика Гигера", "дарк фэнтези",
-      "ретрофутуризм", "мрачный реализм", "wuxia", "мифопанк", "атомпанк",
-      "викторианский хоррор", "славянский хоррор", "азиатская готика", "тёмный арт-деко",
-      "кибернуар", "солярпанк", "некромантический барокко",
-      // Материалы/текстуры/объекты
-      "ржавчина", "осколки", "кроваво-красный", "магический идол", "в паутине",
-      "ржавые цепи", "битое стекло", "чёрный дым", "магма", "чёрный лёд",
-      "пепел", "шипы и колючки", "чешуя дракона", "кованое железо", "обсидиан",
-      "руны на камне", "светящийся мох", "жидкий металл", "кристаллы тьмы",
-      // Типажи/образы
-      "киллер", "шаманка", "чародейка", "богатырши", "лучница", "дикарка",
-      "принцесса в доспехах", "Космическая Амазонка", "Повелительница тьмы",
-      "некромантка", "наёмница", "контрабандистка", "пророчица", "берсерк",
-      "следопыт", "инквизитор", "алхимичка", "странница", "механик боевых машин",
-      "капитан пиратов", "охотница за головами", "мастер ядов", "полководец",
-      "ведьма леса", "клинок в ночи", "хранительница маяка",
-      // Прочее
-      "Хэллоуин", "рай, ад, противостояние", "свет и тьма", "Скандинавия. Руны",
-      "космохоррор", "вуду", "Культ Дагона", "Вакханалия", "алхимия",
-      "Полёт Маргариты", "Невесты Дракулы", "Планета обезьян", "Звонок",
-      "Бесы", "Сияние", "Berserk", "Valhalla", "Унесённые призраками",
-      "зимняя сказка", "Снегурочка и дракон", "Падший ангел", "монастырь, sci-fi",
-      "звездопад", "Дверь в лето", "портал", "нашествие", "ледниковый период",
-      "проклятый артефакт", "охотник и добыча", "вечная мерзлота", "песчаная буря",
-      "чёрная луна", "кровавый рассвет", "эхо войны", "последний поезд",
-      "сумеречная зона", "обряд инициации"
-    ],
-    nsfw: [
-      // Персонажи
-      "Kitana (Mortal Kombat)", "Rayne (BloodRayne)", "Барбарелла", "Лилит",
-      "Bayonetta", "Quiet (Metal Gear)", "Мистик (X-Men)", "Poison Ivy",
-      "Тифа Локхарт", "2B (NieR)", "Widowmaker (Overwatch)", "Лара Крофт (эротика)",
-      // Ситуации/моменты
-      "только вышла из душа", "Я такая пьяная...", "Завтрак в постель", "поцелуй",
-      "Прикосновения", "Похмелье", "предложение руки и сердца", "After party",
-      "Грустный понедельник", "Осенняя хандра", "пробуждение в чужой постели",
-      "тайное свидание", "случайная встреча в лифте", "последний танец",
-      "утро после вечеринки", "опоздала на работу", "застряла в лифте",
-      "подглядывание", "примерка белья", "ночной заплыв", "спор на раздевание",
-      // Места/локации
-      "в купе поезда", "красная комната", "в бане/сауне", "в борделе",
-      "В ночь на пляже", "на плоту", "На сеновале", "На дне",
-      "в ванне с пеной", "между двумя мирами", "Эдем",
-      "гримёрка стриптиз-клуба", "номер в мотеле", "яхта", "крыша небоскрёба ночью",
-      "горячий источник", "будуар", "закулисье кабаре", "подиум",
-      // Стили/эстетика
-      "эротика ренессанса", "эротика из 90-ых", "постер к фильму 18+",
-      "в сеттинге Blade Runner", "глюки (сюрреализм)", "склеп (готика)",
-      "пинап классический", "хентай арт", "эротический нуар", "будуарная фотография",
-      "эротический киберпанк", "гламур 80-х", "эротический арт-деко",
-      "тёмная эротика", "ню в стиле Хельмута Ньютона",
-      // Материалы/объекты/фетиш
-      "латекс", "шибари", "шубы и меха", "кожа и металл", "золото и бархат",
-      "бронелифчик", "микро бикини", "футуристический корсет", "пояс верности",
-      "В легинсах", "в мехах", "костюм зайки", "Бюстгальтер",
-      "чулки и подвязки", "прозрачный шёлк", "мокрая ткань", "цепи и ошейник",
-      "кружевная маска", "боди из страз", "виниловый плащ", "перья и стразы",
-      "корсет и шпильки", "тату и пирсинг",
-      // Типажи/образы
-      "доминатрикс", "Госпожа", "Ночная бабочка", "Личный секретарь", "Босс",
-      "Дальнобойщица", "Сантехник", "Рабыня", "Чудачка", "Нищенка",
-      "кибер горничная", "чернокнижница", "Гоночные королевы", "культуристка",
-      "вебкам модель", "танцовщица бурлеска", "femme fatale", "гейша",
-      "амазонка", "наложница султана", "куртизанка", "цирковая акробатка",
-      // Прочее
-      "наложницы", "секс-кукла-робот", "инкубы и суккубы", "еда и нагота",
-      "голая вечеринка", "невольничий рынок", "огромная грудь", "женская тюрьма",
-      "ахегао", "мисс гибкость", "Бондаж", "BDSM", "Стриптиз",
-      "Мокрые майки", "Оргазм", "Под каблуком", "Запретный плод",
-      "Стейк", "Шоколад", "Блины", "Milf", "Hula Girl",
-      "этюд втроем", "буйство красок", "Полненькие девушки", "кибер руки",
-      "Девушки с большими пушками", "натурщица в студии", "Баня", "бильярд",
-      "Царица подводного мира", "Бездомная", "Заложница", "Ночной дожор",
-      "Холостяк", "выпускной", "креативный пирсинг", "невесомость",
-      "беременность, sci-fi", "пляжная полиция", "автостопщица", "дама под вуалью",
-      // Дополнительные ситуации
-      "соблазнение", "массаж с маслом", "медовый месяц", "грязные танцы",
-      "ролевые игры", "тантрический ритуал", "утренний секс", "романтическая ванна вдвоём",
-      "skinny dipping", "игра в бутылочку", "секс по телефону", "первый раз",
-      // Дополнительные локации
-      "задняя комната клуба", "раздевалка", "лимузин", "фотостудия",
-      "бассейн ночью", "пентхаус", "капитанская каюта", "чердак старого дома",
-      "тёмная аллея", "гарем", "ледяной дворец (эротика)", "оазис в пустыне",
-      // Дополнительные стили
-      "ретро порно 70-х", "софткор", "гламурное ню", "эротика барокко",
-      "японский бондаж", "фетиш-фото", "эротический сюрреализм", "тёмный гламур",
-      // Дополнительные объекты/фетиш
-      "кнут и наручники", "масло для тела", "шпильки 15 см", "кожаный харнесс",
-      "неоновое бельё", "прозрачный дождевик", "боди-арт", "маска и перчатки",
-      "резиновое платье", "бусы на теле", "повязка на глаза",
-      // Дополнительные типажи
-      "медсестра (эротика)", "учительница (строгая)", "стюардесса (откровенная)",
-      "тренер по йоге", "массажистка", "байкерша", "ведьма (эротика)",
-      "пиратка", "вампирша", "суккуб", "жрица наслаждений"
-    ]
-  };
+// Built-in theme prompts. The admin panel ("Промпты") can override any part via
+// settings:ai:prompts = { template, modes: { vanilla|medium|nsfw: { instruction, corpus } } }.
+// Template placeholders: {TYPE} {MODE} {INSTRUCTION} {SAMPLE} {HISTORY}.
+const THEME_TYPE_NAMES = { daily: "ДНЕВНОГО", weekly: "НЕДЕЛЬНОГО", monthly: "МЕСЯЧНОГО" };
+const PROMPT_SAMPLE_SIZE = 20;
 
-  // ИЗОЛИРОВАННАЯ ЛОГИКА ДЛЯ КАЖДОГО РЕЖИМА
-  let fullCorpus = [];
-  let specificInstruction = "";
+const BUILTIN_CORPUS = {
+  vanilla: [
+    // Персонажи
+    "Сейлор Мун", "Велма Динкли (Scooby-Doo)", "Спящая красавица", "Галадриэль (LoTR)",
+    "Мардж Симпсон", "Лея Органа (ЗВ)", "Татьяна Ларина", "Фа Мулан", "Барби",
+    "На'ви (Avatar)", "Дриада", "Ромео и Джульетта", "Зубная фея", "мама Дяди Фёдора",
+    "Рапунцель", "Мэри Поппинс", "Алиса в стране чудес", "Белоснежка", "Покахонтас",
+    "Тоторо и девочка", "Кики (Ведьмина служба доставки)", "Наруто (женская версия)",
+    // Ситуации/моменты
+    "только проснулась", "с подарком", "на рыбалке", "с букетом", "будущие мамы",
+    "переезд", "первый снег", "урожай", "сбор грибов", "на велосипеде",
+    "танец под дождём", "запуск воздушных змеев", "плетение венков", "прогулка с собакой",
+    "примерка шляпок", "завтрак на террасе", "запуск фонариков в небо", "рисование на пленэре",
+    "сбор ягод", "катание на коньках", "утренняя пробежка", "письмо от руки",
+    "ожидание весны", "кормление лебедей", "танцы босиком", "прыжок в воду",
+    "уроки музыки", "фотосессия", "первый день лета", "генеральная уборка",
+    "читает на подоконнике", "качается на качелях", "поёт в душе", "собирает пазл",
+    // Места/пейзажи/локации
+    "яблоневый сад", "в городском парке", "домик в деревне", "водопад", "море",
+    "среди берёз", "на мосту", "летнее кафе", "в музее", "на закате",
+    "оранжерея", "маяк на скале", "крыша многоэтажки", "японский сад", "старый чердак",
+    "набережная", "горное озеро", "лавандовое поле", "зимний парк", "ботанический сад",
+    "крыльцо старого дома", "мансарда", "тропинка в лесу", "песчаный берег",
+    "качели во дворе", "винтажная карусель", "вагон поезда", "книжная лавка",
+    "старая беседка", "рыночная площадь", "лесная поляна", "причал",
+    // Стили/эстетика
+    "кадр из ч/б фильма", "Гжель", "urban photo", "Акварель", "импрессионизм",
+    "арт-нуво", "ретро 60-х", "пастельные тона", "поп-арт", "витражи",
+    "фреска", "мозаика", "графика тушью", "минимализм", "сказочная иллюстрация",
+    "силуэт на закате", "пинап 50-х", "советский плакат", "лубок",
+    // Материалы/текстуры/объекты
+    "бабочки", "белые розы", "лилии", "одуванчик", "подснежники", "мягкая игрушка",
+    "кружево", "перья павлина", "стеклянные шары", "зеркала", "нитки и клубки",
+    "ракушки", "янтарь", "сухоцветы", "воздушные шары", "бумажные фонарики",
+    "жемчуг", "шёлк", "фарфоровые чашки", "старые ключи", "свечи", "ленты в волосах",
+    "мыльные пузыри", "акварельные краски", "перо и чернила", "калейдоскоп",
+    // Типажи/образы
+    "балерина", "актриса", "археолог", "морячка", "стюардесса", "химик",
+    "наездница", "Пастушка", "княгиня", "царевна", "сомелье", "проводница",
+    "садовница", "пианистка", "фотограф", "библиотекарь", "цветочница",
+    "кондитер", "ткачиха", "гончар", "скрипачка", "лесничая", "почтальон",
+    "художница", "медсестра (винтаж)", "парикмахер", "француженка",
+    // Прочее
+    "Африка", "Холи - праздник красок", "близняшки", "веснушки", "очень длинные волосы",
+    "альбиносы", "косы и косички", "в очках", "голубоглазая", "джинсовая одежда",
+    "в рубашке", "в балетной пачке", "радуга", "йога", "теннис", "физкультура",
+    "русские сказки", "дракон", "лебедь", "дельфин", "журавли", "12 месяцев",
+    "алые паруса", "Статуя Свободы", "вышивка", "олимпийская грация", "индейцы Америки",
+    // Дополнительные
+    "варенье", "глинтвейн", "открытка", "ветряная мельница", "облака",
+    "гамак", "снежинки", "утренний туман", "осенние листья", "черешня",
+    "пруд с кувшинками", "старое пианино", "песочные часы"
+  ],
+  medium: [
+    // Персонажи
+    "Эйприл О'Нил (TMNT)", "Невеста Франкенштейна", "Гермиона Грейнджер",
+    "Лара Крофт", "Рыжая Соня", "Женщина-кошка", "Харли Квинн", "Wednesday Addams",
+    "Трисс Меригольд", "Тринити (The Matrix)", "Claire Redfield", "Джинкс/Jinx",
+    "Маления (Elden Ring)", "Принцесса Мононоке", "Ван Хельсинг (женская версия)",
+    "Садако Ямамура", "Зорро", "Яутжа (Predator)", "Йеннифэр (Ведьмак)",
+    "Элой (Horizon)", "Сара Коннор", "Фуриоса (Mad Max)", "Баффи",
+    "Мотоко Кусанаги (Ghost in the Shell)", "Рей (Star Wars)", "Бэла Димитреску",
+    "Сэлин (Underworld)", "Эовин (LoTR)", "Электра", "Гамора",
+    // Ситуации/моменты
+    "сбежавшая невеста", "играющая с огнём", "идет ночью одна", "катастрофа",
+    "похищенная пришельцами", "воскрешение", "первый контакт", "паника",
+    "последний рубеж", "побег из крепости", "засада в переулке", "охота на ведьм",
+    "ритуал пробуждения", "кораблекрушение", "дуэль на мечах", "ночная погоня",
+    "предательство союзника", "блуждание в лабиринте", "пробуждение древнего зла",
+    "осада замка", "бой в метро", "казнь на рассвете", "тайная встреча",
+    "жертвоприношение", "перемирие", "допрос пленника", "побег из матрицы",
+    "прыжок веры", "танец с мёртвыми", "вызов демона", "прощальный поцелуй",
+    // Места/пейзажи/локации
+    "в заброшенном доме", "необитаемый остров", "долина смерти", "руины древнего города",
+    "Колизей", "на краю света", "фэнтези таверна", "Индия", "прогулка по Луне",
+    "подземный бункер", "затопленный город", "лаборатория безумного учёного",
+    "тронный зал", "ледяная пещера", "кладбище кораблей", "заброшенная станция метро",
+    "вершина вулкана", "тёмный лес", "замок на скале", "подводный храм",
+    "Чернобыль", "мёртвый город", "крепость в горах", "болота", "катакомбы",
+    "арена", "заброшенный цирк", "плавучий рынок", "маяк в шторм",
+    "пустыня из костей", "башня мага", "мост между мирами",
+    // Стили/эстетика/мэшапы
+    "Средневековый Киберпанк", "японская гравюра", "Славянское фэнтези",
+    "Техноведьма (steampunk)", "sci-fi, анабиоз", "в стиле милитари",
+    "нуар", "готика", "тёмное барокко", "биомеханика Гигера", "дарк фэнтези",
+    "ретрофутуризм", "мрачный реализм", "wuxia", "мифопанк", "атомпанк",
+    "викторианский хоррор", "славянский хоррор", "азиатская готика", "тёмный арт-деко",
+    "кибернуар", "солярпанк", "некромантический барокко",
+    // Материалы/текстуры/объекты
+    "ржавчина", "осколки", "кроваво-красный", "магический идол", "в паутине",
+    "ржавые цепи", "битое стекло", "чёрный дым", "магма", "чёрный лёд",
+    "пепел", "шипы и колючки", "чешуя дракона", "кованое железо", "обсидиан",
+    "руны на камне", "светящийся мох", "жидкий металл", "кристаллы тьмы",
+    // Типажи/образы
+    "киллер", "шаманка", "чародейка", "богатырши", "лучница", "дикарка",
+    "принцесса в доспехах", "Космическая Амазонка", "Повелительница тьмы",
+    "некромантка", "наёмница", "контрабандистка", "пророчица", "берсерк",
+    "следопыт", "инквизитор", "алхимичка", "странница", "механик боевых машин",
+    "капитан пиратов", "охотница за головами", "мастер ядов", "полководец",
+    "ведьма леса", "клинок в ночи", "хранительница маяка",
+    // Прочее
+    "Хэллоуин", "рай, ад, противостояние", "свет и тьма", "Скандинавия. Руны",
+    "космохоррор", "вуду", "Культ Дагона", "Вакханалия", "алхимия",
+    "Полёт Маргариты", "Невесты Дракулы", "Планета обезьян", "Звонок",
+    "Бесы", "Сияние", "Berserk", "Valhalla", "Унесённые призраками",
+    "зимняя сказка", "Снегурочка и дракон", "Падший ангел", "монастырь, sci-fi",
+    "звездопад", "Дверь в лето", "портал", "нашествие", "ледниковый период",
+    "проклятый артефакт", "охотник и добыча", "вечная мерзлота", "песчаная буря",
+    "чёрная луна", "кровавый рассвет", "эхо войны", "последний поезд",
+    "сумеречная зона", "обряд инициации"
+  ],
+  nsfw: [
+    // Персонажи
+    "Kitana (Mortal Kombat)", "Rayne (BloodRayne)", "Барбарелла", "Лилит",
+    "Bayonetta", "Quiet (Metal Gear)", "Мистик (X-Men)", "Poison Ivy",
+    "Тифа Локхарт", "2B (NieR)", "Widowmaker (Overwatch)", "Лара Крофт (эротика)",
+    // Ситуации/моменты
+    "только вышла из душа", "Я такая пьяная...", "Завтрак в постель", "поцелуй",
+    "Прикосновения", "Похмелье", "предложение руки и сердца", "After party",
+    "Грустный понедельник", "Осенняя хандра", "пробуждение в чужой постели",
+    "тайное свидание", "случайная встреча в лифте", "последний танец",
+    "утро после вечеринки", "опоздала на работу", "застряла в лифте",
+    "подглядывание", "примерка белья", "ночной заплыв", "спор на раздевание",
+    // Места/локации
+    "в купе поезда", "красная комната", "в бане/сауне", "в борделе",
+    "В ночь на пляже", "на плоту", "На сеновале", "На дне",
+    "в ванне с пеной", "между двумя мирами", "Эдем",
+    "гримёрка стриптиз-клуба", "номер в мотеле", "яхта", "крыша небоскрёба ночью",
+    "горячий источник", "будуар", "закулисье кабаре", "подиум",
+    // Стили/эстетика
+    "эротика ренессанса", "эротика из 90-ых", "постер к фильму 18+",
+    "в сеттинге Blade Runner", "глюки (сюрреализм)", "склеп (готика)",
+    "пинап классический", "хентай арт", "эротический нуар", "будуарная фотография",
+    "эротический киберпанк", "гламур 80-х", "эротический арт-деко",
+    "тёмная эротика", "ню в стиле Хельмута Ньютона",
+    // Материалы/объекты/фетиш
+    "латекс", "шибари", "шубы и меха", "кожа и металл", "золото и бархат",
+    "бронелифчик", "микро бикини", "футуристический корсет", "пояс верности",
+    "В легинсах", "в мехах", "костюм зайки", "Бюстгальтер",
+    "чулки и подвязки", "прозрачный шёлк", "мокрая ткань", "цепи и ошейник",
+    "кружевная маска", "боди из страз", "виниловый плащ", "перья и стразы",
+    "корсет и шпильки", "тату и пирсинг",
+    // Типажи/образы
+    "доминатрикс", "Госпожа", "Ночная бабочка", "Личный секретарь", "Босс",
+    "Дальнобойщица", "Сантехник", "Рабыня", "Чудачка", "Нищенка",
+    "кибер горничная", "чернокнижница", "Гоночные королевы", "культуристка",
+    "вебкам модель", "танцовщица бурлеска", "femme fatale", "гейша",
+    "амазонка", "наложница султана", "куртизанка", "цирковая акробатка",
+    // Прочее
+    "наложницы", "секс-кукла-робот", "инкубы и суккубы", "еда и нагота",
+    "голая вечеринка", "невольничий рынок", "огромная грудь", "женская тюрьма",
+    "ахегао", "мисс гибкость", "Бондаж", "BDSM", "Стриптиз",
+    "Мокрые майки", "Оргазм", "Под каблуком", "Запретный плод",
+    "Стейк", "Шоколад", "Блины", "Milf", "Hula Girl",
+    "этюд втроем", "буйство красок", "Полненькие девушки", "кибер руки",
+    "Девушки с большими пушками", "натурщица в студии", "Баня", "бильярд",
+    "Царица подводного мира", "Бездомная", "Заложница", "Ночной дожор",
+    "Холостяк", "выпускной", "креативный пирсинг", "невесомость",
+    "беременность, sci-fi", "пляжная полиция", "автостопщица", "дама под вуалью",
+    // Дополнительные ситуации
+    "соблазнение", "массаж с маслом", "медовый месяц", "грязные танцы",
+    "ролевые игры", "тантрический ритуал", "утренний секс", "романтическая ванна вдвоём",
+    "skinny dipping", "игра в бутылочку", "секс по телефону", "первый раз",
+    // Дополнительные локации
+    "задняя комната клуба", "раздевалка", "лимузин", "фотостудия",
+    "бассейн ночью", "пентхаус", "капитанская каюта", "чердак старого дома",
+    "тёмная аллея", "гарем", "ледяной дворец (эротика)", "оазис в пустыне",
+    // Дополнительные стили
+    "ретро порно 70-х", "софткор", "гламурное ню", "эротика барокко",
+    "японский бондаж", "фетиш-фото", "эротический сюрреализм", "тёмный гламур",
+    // Дополнительные объекты/фетиш
+    "кнут и наручники", "масло для тела", "шпильки 15 см", "кожаный харнесс",
+    "неоновое бельё", "прозрачный дождевик", "боди-арт", "маска и перчатки",
+    "резиновое платье", "бусы на теле", "повязка на глаза",
+    // Дополнительные типажи
+    "медсестра (эротика)", "учительница (строгая)", "стюардесса (откровенная)",
+    "тренер по йоге", "массажистка", "байкерша", "ведьма (эротика)",
+    "пиратка", "вампирша", "суккуб", "жрица наслаждений"
+  ]
+};
 
-  if (contentMode === "vanilla") {
-    fullCorpus = corpus.vanilla;
-    specificInstruction = `ТОЛЬКО SFW (БЕЗОПАСНО): Красота, уют, природа, сказки, светлые персонажи.
-СТРОГИЙ ЗАПРЕТ: Никакой эротики, наготы, фетишей, мрака, крови или насилия. Темы должны быть светлыми и вдохновляющими.`;
-  } else if (contentMode === "medium") {
-    fullCorpus = [...corpus.vanilla, ...corpus.medium];
-    specificInstruction = `МИКС КРАСОТЫ И ДРАМЫ: Поп-культура, культовые персонажи кино и игр. Нуар, триллер, крутые герои, интрига.
-БЕЗ ПОРНО: Допускается мрачность и дерзость, но без открытой эротики и фетишей.`;
-  } else if (contentMode === "nsfw") {
-    fullCorpus = corpus.nsfw;
-    specificInstruction = `ТОЛЬКО NSFW (18+): Жесткая эротика, фетиши, сексуальные ситуации, акцент на обнаженном теле и материалах.
-ПРАВИЛО: Тема должна быть провокационной, смелой и сексуальной.`;
-  }
-
-  // Случайная выборка 20 примеров из корпуса
-  const sampledCorpus = fullCorpus.sort(() => Math.random() - 0.5).slice(0, 20);
-
-  const history = previousThemes.length > 0 ? `\n═══════════════════════════════════════════
-ЗАПРЕЩЕНО ПОВТОРЯТЬ! ЭТИ ТЕМЫ УЖЕ ИСПОЛЬЗОВАЛИСЬ, НЕ БЕРИ ИХ И НЕ ДЕЛАЙ ПОХОЖИЕ:
-${previousThemes.join(", ")}
-═══════════════════════════════════════════` : "";
-
-  const prompt = `Ты — креативный директор арт-сообщества. Твоя задача: родить 6 мощных тем для ${typeName} челленджа.
-Режим: ${contentMode.toUpperCase()}.
+const BUILTIN_PROMPTS = {
+  template: `Ты — креативный директор арт-сообщества. Твоя задача: родить 6 мощных тем для {TYPE} челленджа.
+Режим: {MODE}.
 
 ПРАВИЛА ТЕКУЩЕГО РЕЖИМА:
-${specificInstruction}
+{INSTRUCTION}
 
 ═══════════════════════════════════════════
 СТРОГОЕ ПРАВИЛО РАЗНООБРАЗИЯ ТИПОВ ТЕМ:
@@ -1500,17 +1434,110 @@ ${specificInstruction}
 ФОРМАТ: короткие темы как в примерах — от одного слова до фразы.
 
 БАЗА ПРИМЕРОВ (стиль, наглость, длина — используй для вдохновения, НЕ копируй):
-${sampledCorpus.join(", ")}
-${history}
+{SAMPLE}
+{HISTORY}
 ОТВЕТЬ ТОЛЬКО JSON МАССИВОМ СТРОК:
-["тема 1", "тема 2", "тема 3", "тема 4", "тема 5", "тема 6"]`;
+["тема 1", "тема 2", "тема 3", "тема 4", "тема 5", "тема 6"]`,
+  modes: {
+    vanilla: {
+      instruction: `ТОЛЬКО SFW (БЕЗОПАСНО): Красота, уют, природа, сказки, светлые персонажи.
+СТРОГИЙ ЗАПРЕТ: Никакой эротики, наготы, фетишей, мрака, крови или насилия. Темы должны быть светлыми и вдохновляющими.`,
+      corpus: BUILTIN_CORPUS.vanilla,
+    },
+    medium: {
+      instruction: `МИКС КРАСОТЫ И ДРАМЫ: Поп-культура, культовые персонажи кино и игр. Нуар, триллер, крутые герои, интрига.
+БЕЗ ПОРНО: Допускается мрачность и дерзость, но без открытой эротики и фетишей.`,
+      corpus: [...BUILTIN_CORPUS.vanilla, ...BUILTIN_CORPUS.medium],
+    },
+    nsfw: {
+      instruction: `ТОЛЬКО NSFW (18+): Художественная эротика, фетиши, сексуальные ситуации, акцент на обнаженном теле и материалах.
+ПРАВИЛО: Тема должна быть провокационной, смелой и сексуальной.`,
+      corpus: BUILTIN_CORPUS.nsfw,
+    },
+  },
+};
+
+async function loadPromptOverrides(kv) {
+  try {
+    return await kv.get("settings:ai:prompts", "json");
+  } catch (e) {
+    console.error("loadPromptOverrides failed, using built-in prompts:", e.message);
+    return null;
+  }
+}
+
+/** Built-in prompts with every valid field of the admin override applied on top. */
+function resolvePrompts(overrides) {
+  const out = {
+    template: BUILTIN_PROMPTS.template,
+    modes: Object.fromEntries(Object.entries(BUILTIN_PROMPTS.modes).map(([k, v]) => [k, { ...v }])),
+  };
+  if (!overrides || typeof overrides !== "object") return out;
+  if (typeof overrides.template === "string" && overrides.template.trim()) out.template = overrides.template;
+  for (const mode of Object.keys(out.modes)) {
+    const m = overrides.modes?.[mode];
+    if (!m) continue;
+    if (typeof m.instruction === "string" && m.instruction.trim()) out.modes[mode].instruction = m.instruction;
+    const corpus = Array.isArray(m.corpus) ? m.corpus.filter((x) => typeof x === "string" && x.trim()) : [];
+    if (corpus.length) out.modes[mode].corpus = corpus;
+  }
+  return out;
+}
+
+function sampleOf(items, n) {
+  const a = items.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, n);
+}
+
+function buildThemesPrompt(type, contentMode, previousThemes = [], overrides = null) {
+  const prompts = resolvePrompts(overrides);
+  const mode = prompts.modes[contentMode] ? contentMode : DEFAULT_CONTENT_MODE;
+  const history = previousThemes.length > 0 ? `\n═══════════════════════════════════════════
+ЗАПРЕЩЕНО ПОВТОРЯТЬ! ЭТИ ТЕМЫ УЖЕ ИСПОЛЬЗОВАЛИСЬ, НЕ БЕРИ ИХ И НЕ ДЕЛАЙ ПОХОЖИЕ:
+${previousThemes.join(", ")}
+═══════════════════════════════════════════` : "";
+  const values = {
+    TYPE: THEME_TYPE_NAMES[type] || THEME_TYPE_NAMES.daily,
+    MODE: mode.toUpperCase(),
+    INSTRUCTION: prompts.modes[mode].instruction,
+    SAMPLE: sampleOf(prompts.modes[mode].corpus, PROMPT_SAMPLE_SIZE).join(", "),
+    HISTORY: history,
+  };
+  // One pass over the template only: placeholders inside the instruction, corpus or history stay
+  // literal, and a function replacer keeps `$&`-style patterns in edited text from expanding.
+  return prompts.template.replace(/\{(TYPE|MODE|INSTRUCTION|SAMPLE|HISTORY)\}/g, (_, key) => values[key]);
+}
+
+// Providers the bot can call: "gemini" → Google Generative Language API,
+// the rest → OpenAI-compatible chat completions.
+const OPENAI_COMPATIBLE_PROVIDERS = ["openai", "openrouter", "custom"];
+
+/** The engine is not configured: retrying the same config cannot help. */
+class AiConfigError extends Error {}
+
+// aiConfig: { provider, apiUrl, apiKey, model, temperature?, maxTokens?, referer?, title? }
+async function generateThemes(aiConfig, type, previousThemes = [], contentMode = DEFAULT_CONTENT_MODE, promptOverrides = null) {
+  const { provider, apiKey, model } = aiConfig;
+  const missing = AI_CONFIG_FIELDS.filter((f) => !aiConfig[f]);
+  if (missing.length) throw new AiConfigError(`AI не настроен: нет ${missing.join(", ")}`);
+  if (provider !== "gemini" && !OPENAI_COMPATIBLE_PROVIDERS.includes(provider)) {
+    throw new AiConfigError(`AI не настроен: неизвестный provider "${provider}"`);
+  }
+  // The admin panel stores Gemini's URL with a {model} placeholder.
+  const apiUrl = aiConfig.apiUrl.replace(/\{model\}/gi, () => model);
+
+  const prompt = buildThemesPrompt(type, contentMode, previousThemes, promptOverrides);
 
   try {
     console.log("AI API запрос...", { provider, model, type, contentMode, hasApiKey: !!apiKey });
 
-    let response, text, _debugRaw, _usage;
+    let response, text, _debugRaw, _usage, finishReason = null, resolvedModel = null;
 
-    if (provider === "openai" || provider === "openrouter") {
+    if (provider !== "gemini") {
       // OpenAI-compatible (OpenAI / OpenRouter / GLM / Groq / etc.)
       const headers = {
         "Content-Type": "application/json",
@@ -1527,15 +1554,12 @@ ${history}
           { role: "user", content: prompt },
         ],
       };
-      // Forward temperature только если задан явно — модели GPT-5/o3/Gemini Pro могут rejectать дефолт.
+      // Temperature only when set explicitly — GPT-5/o3-class models reject a default.
       if (typeof aiConfig.temperature === "number") reqBody.temperature = aiConfig.temperature;
-      // Замер по успешным вызовам: 423..2159 completion-токенов (gemini-flash —
-      // thinking-модель, рассуждения идут туда же). 5000 — двойной запас от
-      // наблюдаемого максимума. Лимит 2000, поставленный 29.08 «на глаз», резал
-      // длинные ответы на середине JSON — ниже этой планки не опускать.
-      reqBody.max_tokens = aiConfig.maxTokens ?? 5000;
-      // OpenRouter returns usage.cost (USD) only when explicitly asked.
-      // Without this flag stats show $0 even though the call was billable.
+      // Thinking models spend completion tokens on reasoning (measured 423..2159 per answer);
+      // an explicit cap also keeps OpenRouter from reserving the model's 65536-token maximum.
+      reqBody.max_tokens = aiConfig.maxTokens ?? AI_MAX_TOKENS;
+      // OpenRouter reports usage.cost only when asked.
       if (provider === "openrouter") reqBody.usage = { include: true };
       response = await fetch(apiUrl, {
         method: "POST",
@@ -1550,6 +1574,9 @@ ${history}
       }
 
       const data = await response.json();
+      _debugRaw = data;
+      resolvedModel = data.model || null;
+      finishReason = data.choices?.[0]?.finish_reason || null;
       text = data.choices?.[0]?.message?.content || "";
       // Убираем markdown обёртку если есть
       text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
@@ -1567,9 +1594,7 @@ ${history}
       }
 
     } else {
-      // Gemini (default)
-      const url = apiUrl;
-      response = await fetch(url, {
+      response = await fetch(apiUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1578,7 +1603,7 @@ ${history}
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
-            temperature: 1.0,
+            temperature: typeof aiConfig.temperature === "number" ? aiConfig.temperature : 1.0,
             responseMimeType: "application/json",
           },
           safetySettings: [
@@ -1599,12 +1624,11 @@ ${history}
 
       const data = await response.json();
       _debugRaw = data;
-      // Gemini 2.5+ может вернуть thinking в parts[0], текст в последнем part
+      resolvedModel = data.modelVersion || null;
+      finishReason = data.candidates?.[0]?.finishReason || null;
+      // Thinking models put their reasoning in `thought` parts; the answer may span several parts.
       const parts = data.candidates?.[0]?.content?.parts || [];
-      text = "";
-      for (const part of parts) {
-        if (part.text && !part.thought) text = part.text;
-      }
+      text = parts.filter((part) => part.text && !part.thought).map((part) => part.text).join("");
       // Gemini usage
       if (data.usageMetadata) {
         _usage = {
@@ -1619,7 +1643,8 @@ ${history}
     console.log("AI API статус:", response.status);
 
     if (!text) {
-      throw new Error(`API пустой ответ. Raw: ${JSON.stringify(_debugRaw).substring(0, 300)}`);
+      const raw = JSON.stringify(_debugRaw ?? null) ?? "null";
+      throw new Error(`API пустой ответ (finish_reason: ${finishReason ?? "нет"}). Raw: ${raw.substring(0, 300)}`);
     }
 
     // Парсим JSON
@@ -1635,23 +1660,31 @@ ${history}
       }
     }
 
-    let themes = Array.isArray(parsed) ? parsed : Object.values(parsed).find(v => Array.isArray(v));
-    if (!themes || themes.length < 6) {
-      throw new Error(`Нужно 6 тем, получено: ${themes ? themes.length : 0}`);
+    const validThemes = themesFromAnswer(parsed);
+    if (validThemes.length < POLL_OPTIONS_COUNT) {
+      throw new Error(`Нужно ${POLL_OPTIONS_COUNT} тем, получено: ${validThemes.length}`);
     }
-
-    const validThemes = themes.slice(0, 6).map(t =>
-      typeof t === "string" ? t.trim() : (t.topic || t.theme || t.text || t.content || String(t))
-    );
+    validThemes.length = POLL_OPTIONS_COUNT;
     console.log("AI темы:", validThemes);
-    // Attach usage as non-enumerable so existing code that treats themes as array still works.
-    Object.defineProperty(validThemes, "_usage", { value: _usage || null, enumerable: false });
+    // Non-enumerable so callers keep treating the result as a plain array.
+    Object.defineProperty(validThemes, "_usage", { value: { ...(_usage || {}), resolvedModel }, enumerable: false });
     return validThemes;
 
   } catch (e) {
     console.error("AI ошибка:", { message: e.message, stack: e.stack });
     throw e;
   }
+}
+
+/** Non-empty theme strings from the parsed answer: a JSON array, or an object holding one. */
+function themesFromAnswer(parsed) {
+  const list = Array.isArray(parsed)
+    ? parsed
+    : (parsed && typeof parsed === "object" ? Object.values(parsed).find((v) => Array.isArray(v)) : null) || [];
+  return list
+    .map((t) => (t && typeof t === "object" ? t.topic ?? t.theme ?? t.text ?? t.content ?? "" : t ?? ""))
+    .map((t) => String(t).trim())
+    .filter(Boolean);
 }
 
 // Helper to parse theme format "Short | Full"
@@ -1679,12 +1712,13 @@ async function handleMessage(update, env, tg, storage) {
     const text = message.text || "";
     const threadId = message.message_thread_id || 0;
 
-    // Убираем @username из команды (в группах Telegram добавляет его)
-    const command = text.split("@")[0].split(" ")[0].toLowerCase();
+    // "/cmd@bot args" or "/cmd\nargs": the command is the first word without the @bot suffix.
+    const [commandWord, addressee] = (text.trim().split(/\s+/)[0] || "").split("@");
+    const command = commandWord.toLowerCase();
+    if (command.startsWith("/") && addressee && !(await isAddressedToUs(tg, addressee))) return;
 
-    // Проверяем, есть ли доступ к этому чату
-    const hasAccess = await hasAccessToChat(env, storage, chatId);
-    const config = hasAccess ? await getConfigForChat(env, storage, chatId) : null;
+    const config = await getConfigForChat(env, storage, chatId);
+    const hasAccess = config !== null;
 
     // Commands (работают везде)
     if (command === "/start" || command === "/help") {
@@ -1696,15 +1730,27 @@ async function handleMessage(update, env, tg, storage) {
       return;
     }
 
+    // Rights are looked up only when a command needs them — not for every photo in the chat.
+    let adminCache;
+    const isAdmin = async () => {
+      if (adminCache === undefined) {
+        adminCache = message.from?.id ? await tg.isUserAdmin(chatId, message.from.id) : false;
+      }
+      return adminCache;
+    };
+    // Registering, listing and removing communities is for the bot owner, not any chat admin:
+    // otherwise anyone can add the bot to their group and run it on the owner's AI budget.
+    const isOwner = async () => {
+      const owner = await getOwnerChatId(env, storage);
+      return owner !== null ? message.from?.id === owner : isAdmin();
+    };
+
     // ============================================
-    // SUPER ADMIN: Управление сообществами
+    // BOT OWNER: управление сообществами
     // ============================================
-    const isAdmin = message.from?.id
-      ? await tg.isUserAdmin(chatId, message.from.id)
-      : false;
 
     // Регистрация сообщества: /register_community [название]
-    if (command === "/register_community" && isAdmin) {
+    if (command === "/register_community" && await isOwner()) {
       const args = text.trim().split(/\s+/).slice(1);
       const name = args.join(" ") || message.chat.title || `Community ${chatId}`;
 
@@ -1722,7 +1768,7 @@ async function handleMessage(update, env, tg, storage) {
     }
 
     // Список сообществ: /list_communities
-    if (command === "/list_communities" && isAdmin) {
+    if (command === "/list_communities" && await isOwner()) {
       const communities = await getCommunities(storage);
       const list = Object.values(communities);
 
@@ -1744,7 +1790,7 @@ async function handleMessage(update, env, tg, storage) {
     }
 
     // Удалить сообщество: /unregister_community
-    if (command === "/unregister_community" && isAdmin) {
+    if (command === "/unregister_community" && await isOwner()) {
       const result = await removeCommunity(storage, chatId);
       if (result.success) {
         await tg.sendHtml(chatId, `✅ <b>Сообщество удалено.</b> Готово.`, {
@@ -1763,7 +1809,7 @@ async function handleMessage(update, env, tg, storage) {
     // ============================================
     if (!hasAccess) {
       // Для незарегистрированных сообществ — предлагаем регистрацию
-      if (command.startsWith("/") && isAdmin) {
+      if (command.startsWith("/") && await isAdmin()) {
         await tg.sendHtml(chatId, `⚠️ <i>Сообщество не зарегистрировано.</i>\n\n<code>/register_community</code> — добавить`, {
           message_thread_id: threadId || undefined,
         });
@@ -1772,7 +1818,7 @@ async function handleMessage(update, env, tg, storage) {
     }
 
     // Get topic ID - для настройки
-    if (command === "/topic_id" && isAdmin) {
+    if (command === "/topic_id" && await isAdmin()) {
       const topicInfo = threadId
         ? `🔢 <b>ID темы:</b> <code>${threadId}</code>\n\n<b>Команды:</b>\n<code>/set_daily</code> · <code>/set_weekly</code> · <code>/set_monthly</code> · <code>/set_winners</code>`
         : "⚠️ <i>Это общий чат. Напиши команду внутри темы форума.</i>";
@@ -1782,65 +1828,28 @@ async function handleMessage(update, env, tg, storage) {
       return;
     }
 
-    // Set topic commands (per-community)
-    if (command === "/set_daily" && isAdmin) {
+    // Topic binding: /set_daily, /set_weekly, /set_monthly, /set_winners (per-community)
+    const setTopicMatch = command.match(/^\/set_(daily|weekly|monthly|winners)$/);
+    if (setTopicMatch && await isAdmin()) {
       if (!threadId) {
         await tg.sendHtml(chatId, "⚠️ <i>Напиши команду внутри темы форума</i>", { message_thread_id: undefined });
         return;
       }
-      const topics = config.topics || {};
-      topics.daily = threadId;
+      const slot = setTopicMatch[1];
+      const topics = { ...(config.topics || {}), [slot]: threadId };
       await setCommunityTopics(storage, chatId, topics);
-      await tg.sendHtml(chatId, `✅ <b>Дневные челленджи — здесь.</b> Принято.`, {
-        message_thread_id: threadId,
-      });
-      return;
-    }
-
-    if (command === "/set_weekly" && isAdmin) {
-      if (!threadId) {
-        await tg.sendHtml(chatId, "⚠️ <i>Напиши команду внутри темы форума</i>", { message_thread_id: undefined });
-        return;
-      }
-      const topics = config.topics || {};
-      topics.weekly = threadId;
-      await setCommunityTopics(storage, chatId, topics);
-      await tg.sendHtml(chatId, `✅ <b>Недельные челленджи — здесь.</b> Записано.`, {
-        message_thread_id: threadId,
-      });
-      return;
-    }
-
-    if (command === "/set_monthly" && isAdmin) {
-      if (!threadId) {
-        await tg.sendHtml(chatId, "⚠️ <i>Напиши команду внутри темы форума</i>", { message_thread_id: undefined });
-        return;
-      }
-      const topics = config.topics || {};
-      topics.monthly = threadId;
-      await setCommunityTopics(storage, chatId, topics);
-      await tg.sendHtml(chatId, `✅ <b>Месячные челленджи — здесь.</b> Понял.`, {
-        message_thread_id: threadId,
-      });
-      return;
-    }
-
-    if (command === "/set_winners" && isAdmin) {
-      if (!threadId) {
-        await tg.sendHtml(chatId, "⚠️ <i>Напиши команду внутри темы форума</i>", { message_thread_id: undefined });
-        return;
-      }
-      const topics = config.topics || {};
-      topics.winners = threadId;
-      await setCommunityTopics(storage, chatId, topics);
-      await tg.sendHtml(chatId, `✅ <b>Победители будут объявляться здесь.</b> Готово.`, {
-        message_thread_id: threadId,
-      });
+      const confirmations = {
+        daily: "✅ <b>Дневные челленджи — здесь.</b> Принято.",
+        weekly: "✅ <b>Недельные челленджи — здесь.</b> Записано.",
+        monthly: "✅ <b>Месячные челленджи — здесь.</b> Понял.",
+        winners: "✅ <b>Победители будут объявляться здесь.</b> Готово.",
+      };
+      await tg.sendHtml(chatId, confirmations[slot], { message_thread_id: threadId });
       return;
     }
 
     // Content mode configuration: /set_content_mode vanilla|medium|nsfw (per-community)
-    if (command === "/set_content_mode" && isAdmin) {
+    if (command === "/set_content_mode" && await isAdmin()) {
       const args = text.trim().split(/\s+/).slice(1);
       const mode = args[0]?.toLowerCase();
 
@@ -1853,7 +1862,7 @@ async function handleMessage(update, env, tg, storage) {
           chatId,
           `🎭 <b>РЕЖИМЫ КОНТЕНТА</b>
 
-📍 Сейчас: ${CONTENT_MODES[currentMode].name}
+📍 Сейчас: ${(CONTENT_MODES[currentMode] || CONTENT_MODES[DEFAULT_CONTENT_MODE]).name}
 
 <b>Доступные варианты:</b>
 ${modesList}
@@ -1876,7 +1885,7 @@ ${modesList}
     }
 
     // Toggle accepting link previews as submissions: /set_accept_links on|off
-    if (command === "/set_accept_links" && isAdmin) {
+    if (command === "/set_accept_links" && await isAdmin()) {
       const args = text.trim().split(/\s+/).slice(1);
       const value = args[0]?.toLowerCase();
 
@@ -1910,7 +1919,7 @@ ${modesList}
     }
 
     // Настройка минимума реакций для предложений
-    if (command === "/set_suggestion_reactions" && isAdmin) {
+    if (command === "/set_suggestion_reactions" && await isAdmin()) {
       const args = text.trim().split(/\s+/).slice(1);
       const value = parseInt(args[0], 10);
 
@@ -1952,7 +1961,7 @@ ${modesList}
 
     // Очистка предложений тем
     const clearSuggestionsMatch = command.match(/^\/clear_suggestions(?:_(daily|weekly|monthly))?$/);
-    if (clearSuggestionsMatch && isAdmin) {
+    if (clearSuggestionsMatch && await isAdmin()) {
       let type = clearSuggestionsMatch[1]; // daily|weekly|monthly или undefined для всех
 
       // Если тип не указан, пробуем определить по топику
@@ -1993,7 +2002,7 @@ ${modesList}
 
     // Schedule configuration: /schedule_daily 17, /schedule_weekly 0 17 (day hour), /schedule_monthly 1 17 (per-community)
     const scheduleMatch = command.match(/^\/schedule_(daily|weekly|monthly)$/);
-    if (scheduleMatch && isAdmin) {
+    if (scheduleMatch && await isAdmin()) {
       const type = scheduleMatch[1];
       const args = text.trim().split(/\s+/).slice(1).map(n => parseInt(n, 10));
       const kvSchedule = (await storage.get(`community:${chatId}:settings:schedule`)) || {};
@@ -2008,7 +2017,8 @@ ${modesList}
         }
         kvSchedule.daily = { ...kvSchedule.daily, challengeHour: hour };
         await setSchedule(storage, chatId, kvSchedule);
-        await tg.sendHtml(chatId, `✅ <b>Дневные челленджи:</b> ${hour}:00. Записано.`, {
+        const sched = formatSchedule(await getSchedule(storage, chatId));
+        await tg.sendHtml(chatId, `✅ <b>Дневные челленджи:</b> ${sched.daily}. Записано.`, {
           message_thread_id: threadId || undefined,
         });
       } else if (type === "weekly") {
@@ -2021,8 +2031,8 @@ ${modesList}
         }
         kvSchedule.weekly = { ...kvSchedule.weekly, challengeDay: day, challengeHour: hour };
         await setSchedule(storage, chatId, kvSchedule);
-        const dayNames = ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"];
-        await tg.sendHtml(chatId, `✅ <b>Недельные челленджи:</b> ${dayNames[day]} ${hour}:00. Понял.`, {
+        const sched = formatSchedule(await getSchedule(storage, chatId));
+        await tg.sendHtml(chatId, `✅ <b>Недельные челленджи:</b> ${sched.weekly}. Понял.`, {
           message_thread_id: threadId || undefined,
         });
       } else if (type === "monthly") {
@@ -2035,7 +2045,8 @@ ${modesList}
         }
         kvSchedule.monthly = { ...kvSchedule.monthly, challengeDay: day, challengeHour: hour };
         await setSchedule(storage, chatId, kvSchedule);
-        await tg.sendHtml(chatId, `✅ <b>Месячные челленджи:</b> ${day}-го числа в ${hour}:00. Готово.`, {
+        const sched = formatSchedule(await getSchedule(storage, chatId));
+        await tg.sendHtml(chatId, `✅ <b>Месячные челленджи:</b> ${sched.monthly}. Готово.`, {
           message_thread_id: threadId || undefined,
         });
       }
@@ -2044,7 +2055,7 @@ ${modesList}
 
     // Submission limits: /set_limit_daily 3, /set_limit_weekly 5, /set_limit_monthly 7
     const limitMatch = command.match(/^\/set_limit_(daily|weekly|monthly)$/);
-    if (limitMatch && isAdmin) {
+    if (limitMatch && await isAdmin()) {
       const type = limitMatch[1];
       const args = text.trim().split(/\s+/).slice(1);
       const limit = parseInt(args[0], 10);
@@ -2072,11 +2083,11 @@ ${modesList}
       return;
     }
 
-    if (command === "/admin" && isAdmin) {
+    if (command === "/admin" && await isAdmin()) {
       const schedule = await getSchedule(storage, chatId);
-      const fmt = formatSchedule(schedule);
+      const sched = formatSchedule(schedule);
       const currentMode = await storage.getContentMode(chatId);
-      const modeInfo = CONTENT_MODES[currentMode];
+      const modeInfo = CONTENT_MODES[currentMode] || CONTENT_MODES[DEFAULT_CONTENT_MODE];
       const acceptLinks = await storage.getAcceptLinks(chatId);
       const minSuggestionReactions = await storage.getMinSuggestionReactions(chatId);
       const submissionLimits = await storage.getSubmissionLimits(chatId);
@@ -2097,7 +2108,7 @@ ${modesList}
 
 <b>Статистика</b>
 /status · /cs_daily · /cs_weekly · /cs_monthly
-/test_ai — проверить Gemini API
+/test_ai — проверить AI-движок
 
 <b>Настройка тем</b>
 /set_daily · /set_weekly · /set_monthly · /set_winners
@@ -2112,9 +2123,9 @@ ${modesList}
 /set_limit_daily · /set_limit_weekly · /set_limit_monthly
 
 <b>Расписание:</b>
-• Дневные: ${fmt.daily}
-• Недельные: ${fmt.weekly}
-• Месячные: ${fmt.monthly}
+• Дневные: ${sched.daily}
+• Недельные: ${sched.weekly}
+• Месячные: ${sched.monthly}
 /schedule_daily · /schedule_weekly · /schedule_monthly
 
 <b>Предложения тем:</b>
@@ -2129,53 +2140,22 @@ ${modesList}
       return;
     }
 
-    // Admin: Create polls (no confirmation message - poll itself is visible)
-    if (command === "/poll_daily" && isAdmin) {
-      await storage.deletePoll(chatId, "daily");
-      await generatePoll(env, chatId, config, tg, storage, "daily");
-      return;
-    }
-    if (command === "/poll_weekly" && isAdmin) {
-      await storage.deletePoll(chatId, "weekly");
-      await generatePoll(env, chatId, config, tg, storage, "weekly");
-      return;
-    }
-    if (command === "/poll_monthly" && isAdmin) {
-      await storage.deletePoll(chatId, "monthly");
-      await generatePoll(env, chatId, config, tg, storage, "monthly");
-      return;
-    }
-
-    // Admin: Start challenges (announcement is pinned, no extra notification needed)
-    if (command === "/run_daily" && isAdmin) {
-      await startChallenge(env, chatId, config, tg, storage, "daily");
-      return;
-    }
-    if (command === "/run_weekly" && isAdmin) {
-      await startChallenge(env, chatId, config, tg, storage, "weekly");
-      return;
-    }
-    if (command === "/run_monthly" && isAdmin) {
-      await startChallenge(env, chatId, config, tg, storage, "monthly");
-      return;
-    }
-
-    // Admin: Finish challenges (winner announcement is posted, no extra notification needed)
-    if (command === "/finish_daily" && isAdmin) {
-      await finishChallenge(env, chatId, config, tg, storage, "daily");
-      return;
-    }
-    if (command === "/finish_weekly" && isAdmin) {
-      await finishChallenge(env, chatId, config, tg, storage, "weekly");
-      return;
-    }
-    if (command === "/finish_monthly" && isAdmin) {
-      await finishChallenge(env, chatId, config, tg, storage, "monthly");
+    // Manual lifecycle: /poll_*, /run_*, /finish_* (per-community). Success is visible in the thread.
+    const lifecycleMatch = command.match(/^\/(poll|run|finish)_(daily|weekly|monthly)$/);
+    if (lifecycleMatch && await isAdmin()) {
+      const [, action, type] = lifecycleMatch;
+      try {
+        await LIFECYCLE_ACTIONS[action === "run" ? "start" : action](env, chatId, config, tg, storage, type);
+      } catch (e) {
+        await tg.sendHtml(chatId, `❌ <b>Не получилось:</b> ${command}\n${escapeHtml(e.message)}`, {
+          message_thread_id: threadId || undefined,
+        });
+      }
       return;
     }
 
     // Admin: Status (per-community)
-    if (command === "/status" && isAdmin) {
+    if (command === "/status" && await isAdmin()) {
       const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly] = await Promise.all([
         storage.getChallenge(chatId, "daily"),
         storage.getChallenge(chatId, "weekly"),
@@ -2188,8 +2168,8 @@ ${modesList}
       const formatChallenge = (c, name) => {
         if (!c) return `${name}: нет`;
         if (c.status !== "active") return `${name}: завершён`;
-        const endDateStr = new Date(c.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short" });
-        return `${name}: до ${endDateStr}\n   ${c.topic}`;
+        const endDateStr = new Date(c.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" });
+        return `${name}: до ${endDateStr}\n   ${escapeHtml(c.topic)}`;
       };
 
       const statusMsg = `📊 <b>СТАТУС</b>
@@ -2210,7 +2190,7 @@ ${formatChallenge(monthly, "Месячный")}`;
 
     // Admin: Current challenge stats - /cs_daily, /cs_weekly, /cs_monthly (per-community)
     const csMatch = command.match(/^\/cs_(daily|weekly|monthly)$/);
-    if (csMatch && isAdmin) {
+    if (csMatch && await isAdmin()) {
       const type = csMatch[1];
       const challenge = await storage.getChallenge(chatId, type);
       const typeNames = { daily: "Дневной", weekly: "Недельный", monthly: "Месячный" };
@@ -2223,7 +2203,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       }
 
       const submissions = await storage.getSubmissions(chatId, type, challenge.id);
-      const endDateStr = new Date(challenge.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      const endDateStr = new Date(challenge.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC";
 
       if (submissions.length === 0) {
         await tg.sendHtml(chatId, `📋 <b>${typeNames[type]} челлендж</b>\n\n<b>Тема:</b> ${escapeHtml(challenge.topic)}\n<b>До:</b> ${endDateStr}\n\n<i>Пока нет работ</i>`, {
@@ -2238,7 +2218,7 @@ ${formatChallenge(monthly, "Месячный")}`;
         return (a.timestamp || 0) - (b.timestamp || 0);
       });
       const list = sorted.map((s, i) =>
-        `${i + 1}. @${escapeHtml(s.username || String(s.userId))} — <b>${s.score}</b>`
+        `${i + 1}. ${escapeHtml(displayName(s))} — <b>${s.score}</b>`
       ).join("\n");
 
       await tg.sendHtml(chatId, `📋 <b>${typeNames[type]} челлендж</b>\n\n<b>Тема:</b> ${escapeHtml(challenge.topic)}\n<b>До:</b> ${endDateStr}\n<b>Участников:</b> ${submissions.length}\n\n${list}`, {
@@ -2248,19 +2228,19 @@ ${formatChallenge(monthly, "Месячный")}`;
     }
 
     // Admin: Test AI - тестирует боевой промпт для 6 тем
-    if (command === "/test_ai" && isAdmin) {
+    if (command === "/test_ai" && await isAdmin()) {
       const aiCfg = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId);
       await tg.sendHtml(chatId, `🔄 <i>Проверяю AI (${aiCfg.provider}/${aiCfg.model}, source: ${aiCfg.source})...</i>`, { message_thread_id: threadId || undefined });
       try {
         const contentMode = await storage.getContentMode(chatId);
-        const themes = await generateThemes(aiCfg, "daily", "ru", [], contentMode);
+        const themes = await generateThemes(aiCfg, "daily", [], contentMode, await loadPromptOverrides(env.CHALLENGE_KV));
 
         let msg = `✅ <b>${aiCfg.provider}/${aiCfg.model}</b> (режим: <i>${contentMode}</i>, source: ${aiCfg.source})\n\n`;
         themes.forEach((theme, i) => {
-          msg += `${i + 1}. ${theme}\n\n`;
+          msg += `${i + 1}. ${escapeHtml(theme)}\n\n`;
         });
 
-        await tg.sendHtml(chatId, msg.substring(0, 4000), { message_thread_id: threadId || undefined });
+        await tg.sendHtml(chatId, msg, { message_thread_id: threadId || undefined });
       } catch (e) {
         await tg.sendHtml(chatId, `❌ <b>Ошибка:</b> ${escapeHtml(e.message)}`, { message_thread_id: threadId || undefined });
       }
@@ -2268,7 +2248,7 @@ ${formatChallenge(monthly, "Месячный")}`;
     }
 
     // User commands (per-community)
-    if (text.startsWith("/stats")) {
+    if (command === "/stats") {
       const userId = message.from?.id;
       if (!userId) return;
 
@@ -2295,7 +2275,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       return;
     }
 
-    if (text.startsWith("/leaderboard")) {
+    if (command === "/leaderboard") {
       // Parse type: /leaderboard weekly, /leaderboard monthly, etc.
       const args = text.trim().split(/\s+/);
       const typeMap = {
@@ -2322,7 +2302,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       if (leaderboard.length === 0) {
         await tg.sendHtml(
           chatId,
-          `📭 <i>Рейтинг ${ru.challengeTypes[type]} пока пуст</i>`,
+          `📭 <i>Рейтинг «${escapeHtml(msgChallengeTypeTitle(await loadMessages(env.CHALLENGE_KV), type))}» пока пуст</i>`,
           { message_thread_id: threadId || undefined },
         );
         return;
@@ -2355,7 +2335,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       return;
     }
 
-    if (text.startsWith("/current")) {
+    if (command === "/current") {
       // Parallel KV reads for better performance (per-community)
       const [daily, weekly, monthly] = await Promise.all([
         storage.getChallenge(chatId, "daily"),
@@ -2363,12 +2343,12 @@ ${formatChallenge(monthly, "Месячный")}`;
         storage.getChallenge(chatId, "monthly"),
       ]);
 
+      const msgOverride = await loadMessages(env.CHALLENGE_KV);
       const format = (c, type) => {
-        if (!c || c.status !== "active")
-          return `${ru.challengeTypes[type]}: <i>нет</i>`;
-        const endDateStr = new Date(c.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short" });
-        // Use topicFull for HTML formatting, fallback to topic
-        return `<b>${ru.challengeTypes[type]}</b> (до ${endDateStr})\n${c.topicFull || c.topic}`;
+        const title = escapeHtml(msgChallengeTypeTitle(msgOverride, type));
+        if (!c || c.status !== "active") return `${title}: <i>нет</i>`;
+        const endDateStr = new Date(c.endsAt).toLocaleString("ru-RU", { day: "numeric", month: "short", timeZone: "UTC" });
+        return `<b>${title}</b> (до ${endDateStr})\n${escapeHtml(c.topicFull || c.topic)}`;
       };
 
       await tg.sendHtml(
@@ -2406,7 +2386,7 @@ ${formatChallenge(monthly, "Месячный")}`;
       }
 
       // Парсинг текста предложения: всё после команды
-      const textAfterCommand = text.replace(/^\/suggest(?:_\w+)?\s*@?\w*\s*/i, "").trim();
+      const textAfterCommand = text.replace(/^\/suggest(?:_(?:daily|weekly|monthly))?(?:@\w+)?\s*/i, "").trim();
 
       if (!textAfterCommand) {
         const typeNames = { daily: "дневного", weekly: "недельного", monthly: "месячного" };
@@ -2486,6 +2466,7 @@ ${escapeHtml(themeText)}
         messageId: suggestionMsg.message_id,
         userId: message.from?.id,
         username: message.from?.username || message.from?.first_name,
+        tgUsername: message.from?.username || null,
         theme: themeText,
         createdAt: Date.now(),
         threadId: threadId,
@@ -2545,10 +2526,11 @@ ${escapeHtml(themeText)}
       const sorted = [...suggestions].sort((a, b) => (b.reactionCount || 0) - (a.reactionCount || 0));
 
       for (const s of sorted) {
-        const status = (s.reactionCount || 0) >= minReactionsList ? "✅" : "⏳";
-        const authorName = s.username ? `@${s.username}` : "Аноним";
-        const themePreview = (s.theme || s.title || "").substring(0, 50) + ((s.theme || s.title || "").length > 50 ? "..." : "");
-        msg += `${status} ${escapeHtml(themePreview)} — ${s.reactionCount || 0} реакций\n   ${escapeHtml(authorName)}\n\n`;
+        const count = s.reactionCount || 0;
+        const status = count >= minReactionsList ? "✅" : "⏳";
+        const theme = s.theme || s.title || "";
+        const themePreview = theme.length > 50 ? `${theme.substring(0, 50)}...` : theme;
+        msg += `${status} ${escapeHtml(themePreview)} — ${count} ${pluralize(count, "реакция", "реакции", "реакций")}\n   ${escapeHtml(displayName(s) || "Аноним")}\n\n`;
       }
 
       msg += `Для участия в голосовании нужно <b>${minReactionsList}+</b> реакций.`;
@@ -2564,14 +2546,10 @@ ${escapeHtml(themeText)}
     const hasLinkPreview = message.entities?.some(e => e.type === "url") &&
                           (message.link_preview_options || message.web_page);
 
-    // Check community setting for accepting link previews
-    const acceptLinks = await storage.getAcceptLinks(chatId);
-    const isValidSubmission = hasPhoto || hasImageDocument || (hasLinkPreview && acceptLinks);
+    // The community setting is read only for messages it can affect, not for every chat line.
+    const isValidSubmission = hasPhoto || hasImageDocument || (hasLinkPreview && await storage.getAcceptLinks(chatId));
 
     if (isValidSubmission) {
-      // Check if this community is registered
-      if (!await hasAccessToChat(env, storage, chatId)) return;
-
       const challengeType = await storage.isActiveTopic(chatId, threadId);
       if (!challengeType) {
         // Not a challenge topic - silently ignore
@@ -2618,6 +2596,7 @@ ${escapeHtml(themeText)}
         messageId: message.message_id,
         userId: message.from?.id,
         username: message.from?.username || message.from?.first_name,
+        tgUsername: message.from?.username || null,
         score: 0,
         timestamp: Date.now(),
       }, limit);
@@ -2652,6 +2631,12 @@ ${escapeHtml(themeText)}
   }
 }
 
+
+/** Any reaction except the excluded emoji counts as a vote. */
+function hasCountableReaction(reactions) {
+  return (reactions || []).some((r) =>
+    (r.type === "emoji" && r.emoji !== EXCLUDED_EMOJI) || r.type === "custom_emoji" || r.type === "paid");
+}
 
 // Handle individual reaction updates (when reaction authors are visible)
 async function handleReaction(update, env, storage) {
@@ -2697,19 +2682,7 @@ async function handleReaction(update, env, storage) {
         return;
       }
 
-      // Проверяем есть ли валидная реакция
-      let hasValidReaction = false;
-      for (const r of reaction.new_reaction || []) {
-        if (r.type === "emoji" && r.emoji !== EXCLUDED_EMOJI) {
-          hasValidReaction = true;
-          break;
-        } else if (r.type === "custom_emoji" || r.type === "paid") {
-          hasValidReaction = true;
-          break;
-        }
-      }
-
-      // Обновляем реакции на предложение
+      const hasValidReaction = hasCountableReaction(reaction.new_reaction);
       const updated = await storage.updateSuggestionReactions(chatId, type, reaction.message_id, voterId, hasValidReaction);
 
       if (updated) {
@@ -2743,19 +2716,8 @@ async function handleReaction(update, env, storage) {
       return;
     }
 
-    // Count only ONE unique reaction per user (ignore Premium multi-reactions)
-    // Check if user has at least one valid reaction
-    let hasValidReaction = false;
-    for (const r of reaction.new_reaction || []) {
-      if (r.type === "emoji" && r.emoji !== EXCLUDED_EMOJI) {
-        hasValidReaction = true;
-        break;
-      } else if (r.type === "custom_emoji" || r.type === "paid") {
-        hasValidReaction = true;
-        break;
-      }
-    }
-    const userScore = hasValidReaction ? 1 : 0;
+    // One vote per user however many reactions they put (Premium allows several).
+    const userScore = hasCountableReaction(reaction.new_reaction) ? 1 : 0;
 
     // Ignore self-reactions (user/channel reacting to their own post)
     if (submission && voterId === submission.userId) {
@@ -2788,18 +2750,61 @@ async function handleReaction(update, env, storage) {
   }
 }
 
+// Live vote counts of a bot poll (Telegram sends `poll` updates for polls the bot created).
+async function handlePollUpdate(poll, storage) {
+  try {
+    const ref = await storage.getPollRef(poll.id);
+    if (!ref) return;
+    // The closing update of a replaced poll must not overwrite the counts of the poll now open.
+    if ((await storage.getPoll(ref.chatId, ref.type))?.pollId !== poll.id) return;
+    await storage.setPollVotes(ref.chatId, ref.type, {
+      total: poll.total_voter_count,
+      options: poll.options.map((o) => ({ text: o.text, votes: o.voter_count })),
+      updatedAt: Date.now(),
+    });
+  } catch (e) {
+    console.error("handlePollUpdate error:", e.message);
+  }
+}
+
 // ============================================
 // CRON JOBS
 // ============================================
 
-// A poll only ever lives for one cycle: it is created at pollHour and consumed
-// by startChallenge at challengeHour. So at the next poll moment any poll still
-// in KV is leftover — its delete was lost (KV is eventually consistent and a
-// delete can silently fail to stick). Anything younger than this window is from
-// the current tick (Cloudflare can fire the same minute twice) and is kept.
+// The theme parser requires exactly this many AI themes; polls hold the same number of options.
+const POLL_OPTIONS_COUNT = 6;
+
+// A poll lives for one cycle: created at the poll slot, consumed at the challenge slot.
+// A poll still in KV at the next poll slot is a leftover whose delete did not stick
+// (KV deletes can be lost); anything younger than this is the same tick delivered twice.
 const POLL_FRESH_WINDOW_MS = 10 * 60 * 1000;
 
-// Append to alerts:log, which the admin panel renders under "Алерты".
+// Cloudflare cron is best-effort: scheduledTime drifts inside the minute and ticks get dropped.
+// A slot fires once at its exact instant, or late within CRON_CATCHUP_MS. A failed slot is
+// retried every CRON_RETRY_INTERVAL_MS until CRON_RETRY_MS after the slot.
+const CRON_CATCHUP_MS = 55 * 60 * 1000;
+const CRON_RETRY_MS = 6 * 3600 * 1000;
+const CRON_RETRY_INTERVAL_MS = 10 * 60 * 1000;
+
+const CHALLENGE_TYPES = ["daily", "weekly", "monthly"];
+
+// Challenge length when the schedule has no challenge slot for the type.
+const FALLBACK_CHALLENGE_MS = {
+  daily: 24 * 3600 * 1000,
+  weekly: 7 * 24 * 3600 * 1000,
+  monthly: 28 * 24 * 3600 * 1000,
+};
+
+const SLOT_LABELS = {
+  "poll:daily": "дневной опрос",
+  "poll:weekly": "недельный опрос",
+  "poll:monthly": "месячный опрос",
+  "challenge:daily": "дневной челлендж",
+  "challenge:weekly": "недельный челлендж",
+  "challenge:monthly": "месячный челлендж",
+};
+
+// Append to alerts:log, rendered by the admin panel under "Алерты".
 async function logAlert(storage, severity, component, message, context = undefined) {
   try {
     const log = (await storage.get("alerts:log")) || [];
@@ -2810,697 +2815,643 @@ async function logAlert(storage, severity, component, message, context = undefin
   }
 }
 
-async function generatePoll(env, chatId, config, tg, storage, type) {
-  try {
-    const existing = await storage.getPoll(chatId, type);
-    if (existing) {
-      // A negative age means createdAt is in the future — a corrupt record, not a
-      // fresh poll; treat it as stale rather than letting it block generation forever.
-      const age = Date.now() - (existing.createdAt ?? 0);
-      if (age >= 0 && age < POLL_FRESH_WINDOW_MS) return true; // same tick fired twice — nothing to do
-
-      // Leftover poll from an earlier cycle. Left in place it would block poll
-      // generation forever and startChallenge would keep re-serving its options.
-      console.warn(`generatePoll: dropping stale ${type} poll (age ${Math.round(age / 60000)}m), community=${chatId}`);
-      await logAlert(
-        storage, "warn", "generatePoll",
-        `Найден зависший ${type}-опрос (возраст ${Math.round(age / 3600000)} ч) — удалён, опрос пересоздан`,
-        { chatId, type, createdAt: existing.createdAt },
-      );
-      await storage.deletePoll(chatId, type);
-    }
-
-    const topicId = config.topics[type];
-    const previousThemes = await storage.getThemeHistory(chatId, type);
-    const contentMode = await storage.getContentMode(chatId);
-
-    // ============================================
-    // ДОБАВЛЯЕМ ОДОБРЕННЫЕ ПРЕДЛОЖЕНИЯ ПОЛЬЗОВАТЕЛЕЙ
-    // ============================================
-    const minReactionsPoll = await storage.getMinSuggestionReactions(chatId);
-    const approvedSuggestions = await storage.getApprovedSuggestions(chatId, type, minReactionsPoll);
-
-    // Берём темы из предложений
-    const suggestionThemes = approvedSuggestions.map((s) => s.theme || s.title || s.description);
-
-    // Генерируем AI-темы (меньше, если есть предложения от пользователей)
-    const aiThemeCount = Math.max(2, 6 - suggestionThemes.length);
-    let aiThemes = [];
-
-    if (aiThemeCount >= 2) {
-      aiThemes = await generateThemesLogged(
-        await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId),
-        type, "ru", previousThemes, contentMode,
-        env.CHALLENGE_KV, chatId,
-      );
-      // Ограничиваем количество AI-тем
-      aiThemes = aiThemes.slice(0, aiThemeCount);
-    }
-
-    // Объединяем: сначала предложения пользователей, потом AI-темы
-    const allThemes = [...suggestionThemes, ...aiThemes].slice(0, 6);
-
-    // Для poll используем темы напрямую (или short для обратной совместимости со старыми данными)
-    const pollOptions = allThemes.map((t) => {
-      // Обратная совместимость: если тема в старом формате "short | full", берём short
-      const parsed = parseTheme(t);
-      return parsed.short;
-    });
-
-    // Validate: need at least 2 options for poll
-    if (pollOptions.length < 2) {
-      console.error(`generatePoll: not enough themes for ${type}, community=${chatId}`);
-      return false;
-    }
-
-    // Отправляем poll напрямую (темы теперь короткие и влезают)
-    const poll = await tg.sendPoll(
-      chatId,
-      msgPollQuestion(await loadMessages(env.CHALLENGE_KV)),
-      pollOptions,
-      {
-        message_thread_id: topicId || undefined,
-        is_anonymous: false,
-        allows_multiple_answers: false,
-      },
-    );
-
-    await storage.savePoll(chatId, {
-      type,
-      pollId: poll.poll.id,
-      messageId: poll.message_id,
-      options: allThemes, // Store full "short | full" strings
-      createdAt: Date.now(),
-      topicThreadId: topicId,
-      // Запоминаем какие темы были из предложений пользователей
-      suggestionIds: approvedSuggestions.map((s) => s.id),
-    });
-
-    // Pin the poll
-    try {
-      await tg.pinChatMessage(chatId, poll.message_id);
-    } catch (e) {
-      console.error("Failed to pin poll:", e.message);
-    }
-
-    // Сохраняем ВСЕ варианты опроса в историю, чтобы они не повторялись в будущих опросах
-    await storage.addThemesToHistory(chatId, type, pollOptions);
-
-    // Очищаем ВСЕ предложения после создания опроса
-    // (не только одобренные, чтобы пользователи могли предложить новые темы в следующем цикле)
-    await storage.clearSuggestions(chatId, type);
-
-    console.log(`Poll created: community=${chatId}, type=${type}, userSuggestions=${suggestionThemes.length}, aiThemes=${aiThemes.length}`);
-    return true;
-  } catch (e) {
-    console.error(`generatePoll error (${type}):`, {
-      error: e.message,
-      stack: e.stack,
-    });
-    return false;
-  }
-}
-
-async function finishChallenge(env, chatId, config, tg, storage, type) {
-  try {
-    const challenge = await storage.getChallenge(chatId, type);
-    if (!challenge || challenge.status !== "active") return;
-
-    // Unpin the announcement
-    if (challenge.announcementMessageId) {
-      try {
-        await tg.unpinChatMessage(chatId, challenge.announcementMessageId);
-      } catch (e) {
-        console.error("Failed to unpin announcement:", e.message);
-      }
-    }
-
-    const submissions = await storage.getSubmissions(chatId, type, challenge.id);
-    const msgOverride = await loadMessages(env.CHALLENGE_KV);
-
-    if (submissions.length === 0) {
-      await tg.sendHtml(chatId, msgNoSubmissions(msgOverride), {
-        message_thread_id: challenge.topicThreadId || undefined,
-      });
-    } else {
-      // Filter to keep only the best submission per user
-      // If a user has multiple submissions with same score, keep the earlier one
-      const bestSubmissionPerUser = {};
-      for (const s of submissions) {
-        const best = bestSubmissionPerUser[s.userId];
-        if (
-          !best ||
-          s.score > best.score ||
-          (s.score === best.score && (s.timestamp || 0) < (best.timestamp || 0))
-        ) {
-          bestSubmissionPerUser[s.userId] = s;
-        }
-      }
-      const uniqueSubmissions = Object.values(bestSubmissionPerUser);
-
-      // Find max score and all winners with that score
-      const maxScore = Math.max(...uniqueSubmissions.map((s) => s.score));
-      const winners = uniqueSubmissions.filter((s) => s.score === maxScore);
-
-      // Format winner names
-      const winnerNames = winners
-        .map((w) => (w.username ? `@${w.username}` : `Участник #${w.userId}`))
-        .join(", ");
-
-      await tg.sendHtml(
-        chatId,
-        msgWinnerAnnouncement(msgOverride, winnerNames, maxScore),
-        {
-          message_thread_id: challenge.topicThreadId || undefined,
-          reply_to_message_id: winners[0].messageId,
-        },
-      );
-
-      // Forward all winners to winners topic and add wins
-      for (const winner of winners) {
-        if (config.topics.winners) {
-          try {
-            await tg.forwardMessage(
-              chatId,
-              chatId,
-              winner.messageId,
-              {
-                message_thread_id: config.topics.winners,
-              },
-            );
-            const winnerName = winner.username
-              ? `@${winner.username}`
-              : `Участник #${winner.userId}`;
-            await tg.sendHtml(
-              chatId,
-              msgWinnerAnnouncementFull(msgOverride, winnerName, winner.score, challenge.topicFull || challenge.topic),
-              {
-                message_thread_id: config.topics.winners,
-              },
-            );
-          } catch (e) {
-            console.error("Forward error:", e);
-          }
-        }
-
-        await storage.addWin(chatId, type, winner.userId, winner.username);
-      }
-    }
-
-    challenge.status = "finished";
-    await storage.saveChallenge(chatId, challenge);
-
-    const activeTopics = await storage.getActiveTopics(chatId);
-    delete activeTopics[challenge.topicThreadId];
-    await storage.setActiveTopics(chatId, activeTopics);
-  } catch (e) {
-    console.error(`finishChallenge error (${type}):`, {
-      error: e.message,
-      stack: e.stack,
-    });
-  }
-}
-
-async function startChallenge(env, chatId, config, tg, storage, type) {
-  try {
-    await finishChallenge(env, chatId, config, tg, storage, type);
-
-    const poll = await storage.getPoll(chatId, type);
-    let shortTheme = null;   // null = ещё не выбрана; никаких "Свободная тема" по умолчанию
-    let fullTheme  = null;
-    let voteCount = 0;
-    let themeSource = "poll"; // "poll" | "ai-emergency"
-
-    if (poll) {
-      try {
-        const stopped = await tg.stopPoll(chatId, poll.messageId);
-        let maxVotes = 0;
-        let winnerShort = "";
-
-        // Find winner by short name (that's what's in poll options)
-        for (const opt of stopped.options) {
-          if (opt.voter_count > maxVotes) {
-            maxVotes = opt.voter_count;
-            winnerShort = opt.text;
-          }
-        }
-        voteCount = maxVotes;
-
-        // Unpin the poll
-        try {
-          await tg.unpinChatMessage(chatId, poll.messageId);
-        } catch (e) {
-          console.error("Failed to unpin poll:", e.message);
-        }
-
-        // Find matching full theme from stored options
-        // Handle truncated options (100 char limit) and HTML stripping
-        const matchingFull = poll.options.find((o) => {
-          // Strip HTML because poll options are displayed without HTML tags
-          const short = stripHtml(parseTheme(o).short);
-          if (short === winnerShort) return true;
-          // If winnerShort ends with "...", compare prefix
-          if (winnerShort.endsWith("...")) {
-            return short.startsWith(winnerShort.slice(0, -3));
-          }
-          return false;
-        });
-        if (matchingFull) {
-          const parsed = parseTheme(matchingFull);
-          shortTheme = parsed.short;
-          // Store the COMPLETE original string (title + description)
-          fullTheme = matchingFull;
-        } else if (winnerShort) {
-          shortTheme = winnerShort;
-          fullTheme = winnerShort;
-        }
-      } catch (e) {
-        console.error("Poll stop error:", e);
-        // "already closed" means this poll was consumed by an earlier run and only
-        // survived because its delete was lost. Reusing options[0] here is what
-        // served the group the identical topic day after day — fall through to the
-        // emergency AI branch instead.
-        const alreadyClosed = /already\s+been\s+closed|poll\s+has\s+already/i.test(e.message || "");
-        if (alreadyClosed) {
-          console.warn(`startChallenge: ${type} poll was already closed — treating as consumed, community=${chatId}`);
-          await logAlert(
-            storage, "warn", "startChallenge",
-            `${type}-опрос уже был закрыт (зависший опрос) — тема взята у AI, опрос удалён`,
-            { chatId, type, pollCreatedAt: poll.createdAt },
-          );
-        } else if (poll.options && poll.options.length > 0) {
-          // Transient Telegram error — the poll is still a valid source of themes.
-          const parsed = parseTheme(poll.options[0]);
-          shortTheme = parsed.short;
-          // Store the COMPLETE original string (title + description)
-          fullTheme = poll.options[0];
-        }
-      }
-      // Retry once: a lost delete deadlocks the next poll generation until
-      // generatePoll notices the leftover and cleans it up.
-      await storage.deletePoll(chatId, type);
-      if (await storage.getPoll(chatId, type)) {
-        await storage.deletePoll(chatId, type);
-      }
-    }
-
-    // EMERGENCY: poll отсутствовал ИЛИ Telegram отдал пустой winnerShort.
-    // Раньше тут шла "Свободная тема". Теперь — генерим тему AI прямо сейчас
-    // с retry-цепочкой: per-community config → global config → env, каждый по 3 попытки.
-    if (!shortTheme) {
-      const contentMode = await storage.getContentMode(chatId);
-      const previousThemes = await storage.getThemeHistory(chatId, type);
-      // Build a chain of configs to try in order.
-      const chain = [];
-      try {
-        const perCmty = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId);
-        chain.push(perCmty);
-        // If per-community was actually KV-global override, don't add global twice
-        if (perCmty.source === "kv:community") {
-          const global_ = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, null);
-          if (global_.source !== perCmty.source) chain.push(global_);
-        }
-      } catch (e) {
-        console.error("emergency: loadEffectiveAiConfig failed:", e.message);
-      }
-
-      outer: for (const aiCfg of chain) {
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          try {
-            const themes = await generateThemesLogged(aiCfg, type, "ru", previousThemes, contentMode, env.CHALLENGE_KV, chatId);
-            if (Array.isArray(themes) && themes.length > 0) {
-              const parsed = parseTheme(themes[0]);
-              shortTheme = parsed.short;
-              fullTheme = themes[0];
-              themeSource = `ai-emergency:${aiCfg.source}:try${attempt}`;
-              console.warn(`startChallenge: no poll for ${type}, used emergency AI (${aiCfg.provider}/${aiCfg.model}, ${themeSource})`);
-              break outer;
-            }
-            console.warn(`emergency AI returned empty (${aiCfg.source}, try ${attempt})`);
-          } catch (e) {
-            console.error(`emergency AI try ${attempt} on ${aiCfg.source} failed:`, e.message);
-            // exponential backoff between attempts: 0.5s, 1s, 2s
-            await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt - 1)));
-          }
-        }
-      }
-    }
-
-    // Если и AI не помог — НЕ создаём челлендж + алерт владельцу.
-    if (!shortTheme) {
-      const ownerChatId = parseInt(env.OWNER_CHAT_ID, 10);
-      const errMsg = `❗ Не удалось запустить ${type} челлендж в чате ${chatId} (${config.name || ""}): нет poll и AI упал. Челлендж НЕ создан.`;
-      console.error(errMsg);
-      if (Number.isFinite(ownerChatId)) {
-        try { await tg.sendHtml(ownerChatId, errMsg); } catch {}
-      }
-      return false; // выход без создания challenge
-    }
-
-    const topicId = config.topics[type];
-    const MS_PER_HOUR = 3600000;
-    const durations = {
-      daily: 24 * MS_PER_HOUR,
-      weekly: 7 * 24 * MS_PER_HOUR,
-      monthly: 28 * 24 * MS_PER_HOUR,
-    };
-    const startedAt = Date.now();
-    const endsAt = startedAt + durations[type];
-
-    const dateFormat = { day: "numeric", month: "short" };
-    const startDateStr = new Date(startedAt).toLocaleString("ru-RU", dateFormat);
-    const endDateStr = new Date(endsAt).toLocaleString("ru-RU", dateFormat);
-
-    const challengeId = await storage.getNextChallengeId(chatId, type);
-
-    // Use full description in announcement with vote count
-    const announcement = await tg.sendHtml(
-      chatId,
-      msgChallengeAnnouncement(await loadMessages(env.CHALLENGE_KV), type, fullTheme, startDateStr, endDateStr, voteCount),
-      {
-        message_thread_id: topicId || undefined,
-      },
-    );
-
-    // Pin the announcement
-    try {
-      await tg.pinChatMessage(chatId, announcement.message_id);
-    } catch (e) {
-      console.error("Failed to pin announcement:", e.message);
-    }
-
-    // Store short theme for leaderboard/stats display
-    await storage.saveChallenge(chatId, {
-      id: challengeId,
-      type,
-      topic: shortTheme,
-      topicFull: fullTheme,
-      status: "active",
-      startedAt,
-      endsAt,
-      topicThreadId: topicId,
-      announcementMessageId: announcement.message_id,
-    });
-
-    const activeTopics = await storage.getActiveTopics(chatId);
-    activeTopics[topicId] = type;
-    await storage.setActiveTopics(chatId, activeTopics);
-
-    // Save theme to history (to avoid repetition in future)
-    await storage.addThemeToHistory(chatId, type, shortTheme);
-
-    console.log(`Challenge started: community=${chatId}, ${type} #${challengeId} - "${shortTheme}" (${voteCount} votes)`);
-    return true;
-  } catch (e) {
-    console.error(`startChallenge error (${type}):`, {
-      error: e.message,
-      stack: e.stack,
-    });
-    return false;
-  }
-}
-
-// Cloudflare cron is best-effort: `scheduledTime` drifts inside the minute
-// (observed 02:06:16 and 02:23:58 on the same `* * * * *` trigger) and a tick
-// can be dropped entirely. Matching a slot with `h === H && m === M` therefore
-// loses a whole day's poll or challenge whenever its one minute is missed.
-// Instead each slot is resolved to its exact instant and fired once, late if
-// need be, within this window.
-const CRON_CATCHUP_MS = 55 * 60 * 1000;
-
-// A slot whose action failed (AI provider down, Telegram refusing, …) must not
-// count as done — on 2026-08-29 OpenRouter ran out of credits and all three
-// groups silently went a whole day with no challenge. Keep retrying inside this
-// window, spaced out so a dead provider is not hammered every minute.
-const CRON_RETRY_MS = 6 * 3600 * 1000;
-const CRON_RETRY_INTERVAL_MS = 10 * 60 * 1000;
-
-/** Telegram DM for the owner: KV overrides env so it can be set without a redeploy. */
+/** Bot owner's Telegram id: KV overrides env so it can be changed without a redeploy. */
 async function getOwnerChatId(env, storage) {
   try {
     const fromKv = await storage.get("settings:owner_chat_id");
     const id = parseInt(fromKv ?? env.OWNER_CHAT_ID, 10);
     return Number.isFinite(id) ? id : null;
-  } catch {
+  } catch (e) {
+    console.error("getOwnerChatId failed:", e.message);
     return null;
   }
 }
 
-// Человекочитаемые названия слотов — в личку не должен прилетать "poll:weekly".
-const SLOT_LABELS = {
-  "poll:daily": "дневной опрос",
-  "poll:weekly": "недельный опрос",
-  "poll:monthly": "месячный опрос",
-  "challenge:daily": "дневной челлендж",
-  "challenge:weekly": "недельный челлендж",
-  "challenge:monthly": "месячный челлендж",
-};
-
-/** Alert log + DM to the owner. Never throws — reporting must not break the run. */
-async function reportFailure(env, tg, storage, component, message, context) {
-  await logAlert(storage, "error", component, message, context);
+/** Plain-text DM to the owner. Never throws — reporting must not break the run. */
+async function notifyOwner(env, tg, storage, text) {
   const owner = await getOwnerChatId(env, storage);
   if (owner === null) return;
   try {
-    await tg.sendHtml(owner, `❗ <b>Челлендж-бот</b>\n${message}`);
+    await tg.sendHtml(owner, `<b>Челлендж-бот</b>\n\n${escapeHtml(text)}`);
   } catch (e) {
-    console.error("reportFailure: не смог написать владельцу:", e.message);
+    console.error("notifyOwner failed:", e.message);
   }
 }
 
-/** Most recent occurrence of a schedule slot at or before `now` (all UTC). */
+async function reportFailure(env, tg, storage, component, message, context) {
+  await logAlert(storage, "error", component, message, context);
+  await notifyOwner(env, tg, storage, `❗ ${message}`);
+}
+
+/**
+ * The schedule instant of a poll or challenge slot: { day?, hour, minute }.
+ * Missing poll fields fall back to legacy defaults derived from the challenge slot.
+ */
+function slotAt(schedule, type, action) {
+  const s = schedule[type] || {};
+  // Anything but an integer (a hand-edited "17", null) leaves the slot unscheduled.
+  const int = (v) => (Number.isInteger(v) ? v : undefined);
+  if (action === "challenge") {
+    return { day: int(s.challengeDay), hour: int(s.challengeHour), minute: int(s.challengeMinute) ?? 0 };
+  }
+  const minute = int(s.pollMinute) ?? 0;
+  const challengeHour = int(s.challengeHour);
+  const challengeDay = int(s.challengeDay);
+  if (type === "daily") {
+    return { hour: int(s.pollHour) ?? (challengeHour === undefined ? undefined : (challengeHour + 12) % 24), minute };
+  }
+  if (type === "weekly") {
+    const day = int(s.pollDay) ?? (challengeDay === undefined ? undefined : (challengeDay + 6) % 7);
+    return { day, hour: int(s.pollHour), minute };
+  }
+  const day = int(s.pollDay) ?? (challengeDay === undefined ? undefined : challengeDay === 1 ? 28 : challengeDay - 3);
+  return { day, hour: int(s.pollHour), minute };
+}
+
+/** Most recent occurrence of a slot at or before `now` (UTC). Monthly days are 1..28. */
 function lastSlotOccurrence(now, kind, { day, hour, minute }) {
-  const H = typeof hour === "number" ? hour : 0;
-  const M = typeof minute === "number" ? minute : 0;
-  const at = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), H, M, 0, 0));
+  const H = Number.isInteger(hour) ? hour : 0;
+  const M = Number.isInteger(minute) ? minute : 0;
+  const y = now.getUTCFullYear();
+  const mo = now.getUTCMonth();
+  const at = new Date(Date.UTC(y, mo, now.getUTCDate(), H, M, 0, 0));
 
   if (kind === "daily") {
-    if (at.getTime() > now.getTime()) at.setUTCDate(at.getUTCDate() - 1);
+    if (at > now) at.setUTCDate(at.getUTCDate() - 1);
     return at.getTime();
   }
   if (kind === "weekly") {
     at.setUTCDate(at.getUTCDate() - ((at.getUTCDay() - (day ?? 0) + 7) % 7));
-    if (at.getTime() > now.getTime()) at.setUTCDate(at.getUTCDate() - 7);
+    if (at > now) at.setUTCDate(at.getUTCDate() - 7);
     return at.getTime();
   }
-  // monthly — day is 1..28
   const dom = Math.min(Math.max(day ?? 1, 1), 28);
-  let month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), dom, H, M, 0, 0));
-  if (month.getTime() > now.getTime()) {
-    month = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, dom, H, M, 0, 0));
-  }
-  return month.getTime();
+  const month = new Date(Date.UTC(y, mo, dom, H, M, 0, 0));
+  return month > now ? Date.UTC(y, mo - 1, dom, H, M, 0, 0) : month.getTime();
+}
+
+/** First occurrence of a slot strictly after `after`. */
+function nextSlotOccurrence(after, kind, at) {
+  const next = new Date(lastSlotOccurrence(after, kind, at));
+  if (kind === "daily") next.setUTCDate(next.getUTCDate() + 1);
+  else if (kind === "weekly") next.setUTCDate(next.getUTCDate() + 7);
+  else next.setUTCMonth(next.getUTCMonth() + 1);
+  return next.getTime();
+}
+
+/** A challenge runs until the next scheduled start of its type — no gap, no overlap. */
+function challengeEndsAt(schedule, type, startedAt) {
+  const at = slotAt(schedule, type, "challenge");
+  if (!Number.isInteger(at.hour)) return startedAt + FALLBACK_CHALLENGE_MS[type];
+  return nextSlotOccurrence(new Date(startedAt), type, at);
 }
 
 /**
- * Run `action` once per schedule slot.
- * Doubles as an idempotency guard — Cloudflare can deliver the same minute twice,
- * which used to start a challenge, immediately finish it and start another.
+ * Name to show for a submission or leaderboard entry. `tgUsername` holds the real
+ * Telegram username; older records only have `username`, which may be a first name.
  */
-async function runSlotOnce(env, tg, storage, chatId, state, slotKey, occurrence, nowMs, action) {
-  if (nowMs < occurrence) return false;
-  if (state.slots[slotKey] === occurrence) return false; // already done for this cycle
+function displayName(entry) {
+  if (!entry) return "";
+  if (entry.tgUsername) return `@${entry.tgUsername}`;
+  if ("tgUsername" in entry) return entry.username || `Участник #${entry.userId}`;
+  const u = entry.username;
+  if (u && /^[A-Za-z][A-Za-z0-9_]{4,31}$/.test(u)) return `@${u}`;
+  return u || `Участник #${entry.userId}`;
+}
 
+/** Close a poll we abandon so it does not stay open and pinned in the chat. */
+async function retirePoll(tg, storage, chatId, type, poll) {
+  if (poll?.messageId) {
+    try {
+      await tg.stopPoll(chatId, poll.messageId);
+    } catch (e) {
+      console.error(`retirePoll: stopPoll ${type} failed:`, e.message);
+    }
+    try {
+      await tg.unpinChatMessage(chatId, poll.messageId);
+    } catch (e) {
+      console.error(`retirePoll: unpin ${type} failed:`, e.message);
+    }
+  }
+  await storage.deletePoll(chatId, type);
+}
+
+async function deleteMessageLogged(tg, chatId, messageId, what) {
+  try {
+    await tg.request("deleteMessage", { chat_id: chatId, message_id: messageId });
+  } catch (e) {
+    console.error(`could not delete ${what}:`, e.message);
+  }
+}
+
+/** Post the poll for the next challenge. Resolves when a poll is live, throws with the reason otherwise. */
+async function generatePoll(env, chatId, config, tg, storage, type) {
+  let sent = null;
+  let pollOptions;
+  let suggestions;
+  let aiCount = 0;
+  try {
+    const existing = await storage.getPoll(chatId, type);
+    if (existing) {
+      const age = Date.now() - (existing.createdAt ?? 0);
+      // A future createdAt is a corrupt record, not a fresh poll.
+      if (age >= 0 && age < POLL_FRESH_WINDOW_MS) return;
+      console.warn(`generatePoll: retiring stale ${type} poll (age ${Math.round(age / 60000)}m), community=${chatId}`);
+      await logAlert(
+        storage, "warn", "generatePoll",
+        `Найден зависший ${SLOT_LABELS[`poll:${type}`]} (возраст ${Math.round(age / 3600000)} ч) — закрыт, опрос пересоздан`,
+        { chatId, type, createdAt: existing.createdAt, messageId: existing.messageId },
+      );
+      await retirePoll(tg, storage, chatId, type, existing);
+    }
+
+    const previousThemes = await storage.getThemeHistory(chatId, type);
+    const contentMode = await storage.getContentMode(chatId);
+    const minReactions = await storage.getMinSuggestionReactions(chatId);
+    suggestions = (await storage.getApprovedSuggestions(chatId, type, minReactions))
+      .filter((s) => s.theme || s.title || s.description)
+      .slice(0, POLL_OPTIONS_COUNT);
+    const suggestionThemes = suggestions.map((s) => s.theme || s.title || s.description);
+
+    let aiThemes = [];
+    const aiSlots = POLL_OPTIONS_COUNT - suggestionThemes.length;
+    if (aiSlots > 0) {
+      const aiConfig = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId);
+      aiThemes = (await generateThemesLogged(aiConfig, type, previousThemes, contentMode, env.CHALLENGE_KV, chatId))
+        .slice(0, aiSlots);
+    }
+    // Stored options keep the full "short | full" strings; the poll shows the short part.
+    const allThemes = [...suggestionThemes, ...aiThemes];
+    aiCount = aiThemes.length;
+    pollOptions = allThemes.map((t) => parseTheme(t).short);
+    if (pollOptions.length < 2) {
+      throw new Error(`для опроса нужно минимум 2 темы, есть ${pollOptions.length}`);
+    }
+
+    const topicId = config.topics[type];
+    sent = await tg.sendPoll(chatId, msgPollQuestion(await loadMessages(env.CHALLENGE_KV)), pollOptions, {
+      message_thread_id: topicId || undefined,
+      is_anonymous: false,
+      allows_multiple_answers: false,
+    });
+    await storage.savePoll(chatId, {
+      type,
+      pollId: sent.poll.id,
+      messageId: sent.message_id,
+      options: allThemes,
+      createdAt: Date.now(),
+      topicThreadId: topicId,
+      suggestionIds: suggestions.map((s) => s.id),
+    });
+  } catch (e) {
+    console.error(`generatePoll error (${type}):`, { error: e.message, stack: e.stack });
+    // Posted but not recorded: take it back so the retry does not leave two polls in the thread.
+    if (sent) await deleteMessageLogged(tg, chatId, sent.message_id, `unrecorded ${type} poll`);
+    throw e;
+  }
+
+  // The poll is live from here on: failures below must not make the slot post it again.
+  try {
+    await tg.pinChatMessage(chatId, sent.message_id);
+  } catch (e) {
+    console.error("Failed to pin poll:", e.message);
+  }
+  try {
+    await storage.indexPoll(sent.poll.id, chatId, type);
+    await storage.setPollVotes(chatId, type, {
+      total: 0,
+      options: pollOptions.map((text) => ({ text, votes: 0 })),
+      updatedAt: Date.now(),
+    });
+    // Every option goes to history so future polls do not repeat it.
+    await storage.addThemesToHistory(chatId, type, pollOptions);
+    // All suggestions are cleared, not only the used ones: the next cycle starts fresh.
+    await storage.clearSuggestions(chatId, type);
+  } catch (e) {
+    console.error(`generatePoll: bookkeeping after publish failed (${type}):`, e.message);
+    await logAlert(storage, "warn", "generatePoll", `Опрос опубликован, но история тем не обновилась: ${e.message}`, { chatId, type });
+  }
+  console.log(`Poll created: community=${chatId}, type=${type}, userSuggestions=${suggestions.length}, aiThemes=${aiCount}`);
+}
+
+/**
+ * Close the poll and resolve its winning option to the stored theme.
+ * Nobody voted → a random option. The poll is unpinned and removed either way.
+ */
+async function takePollWinner(tg, storage, chatId, type, poll) {
+  let theme = null;
+  let voteCount = 0;
+  try {
+    const stopped = await tg.stopPoll(chatId, poll.messageId);
+    let winnerText = "";
+    for (const opt of stopped.options) {
+      if (opt.voter_count > voteCount) {
+        voteCount = opt.voter_count;
+        winnerText = opt.text;
+      }
+    }
+    if (winnerText) {
+      // Options were shown without HTML and possibly cut to 100 chars with "...".
+      const full = poll.options.find((o) => {
+        const short = stripHtml(parseTheme(o).short);
+        return short === winnerText || (winnerText.endsWith("...") && short.startsWith(winnerText.slice(0, -3)));
+      });
+      theme = full ? { short: parseTheme(full).short, full } : { short: winnerText, full: winnerText };
+    } else if (poll.options?.length) {
+      const pick = poll.options[Math.floor(Math.random() * poll.options.length)];
+      theme = { short: parseTheme(pick).short, full: pick };
+    }
+  } catch (e) {
+    console.error("Poll stop error:", e.message);
+    // "already closed" = consumed by an earlier run whose delete was lost: its options are spent.
+    if (/already\s+been\s+closed|poll\s+has\s+already/i.test(e.message || "")) {
+      await logAlert(
+        storage, "warn", "startChallenge",
+        `${type}-опрос уже был закрыт (зависший опрос) — тема взята у AI, опрос удалён`,
+        { chatId, type, pollCreatedAt: poll.createdAt },
+      );
+    } else if (poll.options?.length) {
+      theme = { short: parseTheme(poll.options[0]).short, full: poll.options[0] };
+    }
+  }
+  try {
+    await tg.unpinChatMessage(chatId, poll.messageId);
+  } catch (e) {
+    console.error("Failed to unpin poll:", e.message);
+  }
+  await storage.deletePoll(chatId, type);
+  // A lost delete is caught again by generatePoll's staleness check; one retry here is cheap.
+  if (await storage.getPoll(chatId, type)) await storage.deletePoll(chatId, type);
+  return { theme, voteCount };
+}
+
+/** A theme straight from AI when there is no usable poll: community engine first, then the global one. */
+async function emergencyTheme(env, storage, chatId, type) {
+  const contentMode = await storage.getContentMode(chatId);
+  const previousThemes = await storage.getThemeHistory(chatId, type);
+  const own = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, chatId);
+  const chain = [own];
+  if (own.source === "kv:community") {
+    const global_ = await loadEffectiveAiConfig(env, env.CHALLENGE_KV, null);
+    if (global_.source !== own.source) chain.push(global_);
+  }
+
+  let lastError = null;
+  for (const aiCfg of chain) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const themes = await generateThemesLogged(aiCfg, type, previousThemes, contentMode, env.CHALLENGE_KV, chatId);
+        console.warn(`startChallenge: no usable ${type} poll, emergency AI theme (${aiCfg.source}, try ${attempt})`);
+        return { short: parseTheme(themes[0]).short, full: themes[0] };
+      } catch (e) {
+        lastError = e;
+        console.error(`emergency AI try ${attempt} on ${aiCfg.source} failed:`, e.message);
+        if (e instanceof AiConfigError) break;
+        await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+      }
+    }
+  }
+  throw new Error(`нет опроса, а AI не дал тему: ${lastError.message}`);
+}
+
+/** Per user keep the best work; an equal score keeps the earlier one. */
+function bestSubmissionPerUser(submissions) {
+  const best = {};
+  for (const s of submissions) {
+    const cur = best[s.userId];
+    if (!cur || s.score > cur.score || (s.score === cur.score && (s.timestamp || 0) < (cur.timestamp || 0))) {
+      best[s.userId] = s;
+    }
+  }
+  return Object.values(best);
+}
+
+function communityLabel(config, chatId) {
+  return config?.name ? `«${config.name}»` : `чат ${chatId}`;
+}
+
+/**
+ * Close the active challenge: record the result, then announce it. Throws only when the result
+ * could not be recorded — the challenge then stays active and nothing replaces it. Messages
+ * Telegram refuses (edited template with broken HTML, deleted topic) are reported to the owner
+ * and do not undo the result.
+ */
+async function finishChallenge(env, chatId, config, tg, storage, type) {
+  const challenge = await storage.getChallenge(chatId, type);
+  if (!challenge || challenge.status !== "active") return;
+
+  const submissions = await storage.getSubmissions(chatId, type, challenge.id);
+  // Per-message reaction maps are the source of truth; the score in the array is a cache.
+  await Promise.all(submissions.map(async (s) => {
+    const reactions = await storage.getReactions(chatId, type, challenge.id, s.messageId);
+    if (Object.keys(reactions).length) {
+      s.score = Object.values(reactions).reduce((sum, v) => sum + (Number(v) || 0), 0);
+    }
+  }));
+  const contenders = bestSubmissionPerUser(submissions);
+  const maxScore = contenders.length ? Math.max(...contenders.map((s) => s.score || 0)) : 0;
+  const winners = maxScore > 0 ? contenders.filter((s) => (s.score || 0) === maxScore) : [];
+
+  challenge.status = "finished";
+  await storage.saveChallenge(chatId, challenge);
+
+  const problems = [];
+  const attempt = async (what, fn) => {
+    try {
+      await fn();
+    } catch (e) {
+      console.error(`finishChallenge (${type}): ${what} failed:`, e.message);
+      problems.push(`${what}: ${e.message}`);
+    }
+  };
+  for (const winner of winners) {
+    await attempt("запись победы", () => storage.addWin(chatId, type, winner.userId, winner.username));
+  }
+  await attempt("закрытие приёма работ", async () => {
+    const activeTopics = await storage.getActiveTopics(chatId);
+    delete activeTopics[challenge.topicThreadId];
+    await storage.setActiveTopics(chatId, activeTopics);
+  });
+  if (challenge.announcementMessageId) {
+    try {
+      await tg.unpinChatMessage(chatId, challenge.announcementMessageId);
+    } catch (e) {
+      console.error("Failed to unpin announcement:", e.message);
+    }
+  }
+
+  const msgOverride = await loadMessages(env.CHALLENGE_KV);
+  const thread = { message_thread_id: challenge.topicThreadId || undefined };
+  if (submissions.length === 0) {
+    await attempt("сообщение об итогах", () => tg.sendHtml(chatId, msgNoSubmissions(msgOverride), thread));
+  } else if (winners.length === 0) {
+    await attempt("сообщение об итогах", () => tg.sendHtml(chatId, msgNoVotes(msgOverride), thread));
+  } else {
+    await attempt("объявление победителя", () => tg.sendHtml(
+      chatId,
+      msgWinnerAnnouncement(msgOverride, winners.map(displayName).join(", "), maxScore),
+      { ...thread, reply_to_message_id: winners[0].messageId },
+    ));
+    if (config.topics.winners) {
+      for (const winner of winners) {
+        await attempt("пересылка в тему победителей", async () => {
+          await tg.forwardMessage(chatId, chatId, winner.messageId, { message_thread_id: config.topics.winners });
+          await tg.sendHtml(
+            chatId,
+            msgWinnerAnnouncementFull(msgOverride, displayName(winner), winner.score, challenge.topicFull || challenge.topic),
+            { message_thread_id: config.topics.winners },
+          );
+        });
+      }
+    }
+  }
+
+  if (problems.length) {
+    const what = SLOT_LABELS[`challenge:${type}`];
+    await reportFailure(
+      env, tg, storage, `finish:${type}`,
+      `${what[0].toUpperCase()}${what.slice(1)} — ${communityLabel(config, chatId)}: итоги подведены, но не всё прошло.\n${problems.join("\n")}`,
+      { chatId, type, challengeId: challenge.id },
+    );
+  }
+}
+
+/** "30 сент., 17:00 UTC" */
+function formatChallengeDate(ms) {
+  const text = new Date(ms).toLocaleString("ru-RU", {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC",
+  });
+  return `${text} UTC`;
+}
+
+/**
+ * Close the previous challenge and start the next one with the poll winner, or an AI theme when
+ * there is no usable poll. Resolves when the new challenge is live, throws with the reason otherwise.
+ */
+async function startChallenge(env, chatId, config, tg, storage, type, startedAt = Date.now()) {
+  await finishChallenge(env, chatId, config, tg, storage, type);
+
+  let announcement = null;
+  let challenge;
+  try {
+    let theme = null;
+    let voteCount = 0;
+    const poll = await storage.getPoll(chatId, type);
+    if (poll) ({ theme, voteCount } = await takePollWinner(tg, storage, chatId, type, poll));
+    if (!theme) theme = await emergencyTheme(env, storage, chatId, type);
+
+    const schedule = await getSchedule(storage, chatId);
+    const topicId = config.topics[type];
+    const endsAt = challengeEndsAt(schedule, type, startedAt);
+
+    announcement = await tg.sendHtml(
+      chatId,
+      msgChallengeAnnouncement(
+        await loadMessages(env.CHALLENGE_KV), type, theme.full,
+        formatChallengeDate(startedAt), formatChallengeDate(endsAt), voteCount,
+      ),
+      { message_thread_id: topicId || undefined },
+    );
+
+    challenge = {
+      id: await storage.getNextChallengeId(chatId, type),
+      type,
+      topic: theme.short,
+      topicFull: theme.full,
+      status: "active",
+      startedAt,
+      endsAt,
+      topicThreadId: topicId,
+      announcementMessageId: announcement.message_id,
+    };
+    await storage.saveChallenge(chatId, challenge);
+  } catch (e) {
+    console.error(`startChallenge error (${type}):`, { error: e.message, stack: e.stack });
+    // Announced but not recorded: take it back so the retry does not announce twice.
+    if (announcement) await deleteMessageLogged(tg, chatId, announcement.message_id, `unrecorded ${type} announcement`);
+    throw e;
+  }
+
+  // The challenge is live from here on: failures below must not make the slot start it again.
+  try {
+    await tg.pinChatMessage(chatId, announcement.message_id);
+  } catch (e) {
+    console.error("Failed to pin announcement:", e.message);
+  }
+  try {
+    const activeTopics = await storage.getActiveTopics(chatId);
+    activeTopics[challenge.topicThreadId] = type;
+    await storage.setActiveTopics(chatId, activeTopics);
+    await storage.addThemesToHistory(chatId, type, [challenge.topic]);
+  } catch (e) {
+    console.error(`startChallenge: bookkeeping after start failed (${type}):`, e.message);
+    await logAlert(
+      storage, "error", "startChallenge",
+      `Челлендж запущен, но тема треда не отмечена активной — работы могут не приниматься: ${e.message}`,
+      { chatId, type, challengeId: challenge.id },
+    );
+  }
+  console.log(`Challenge started: community=${chatId}, ${type} #${challenge.id} - "${challenge.topic}"`);
+}
+
+const SLOT_ACTIONS = { poll: generatePoll, challenge: startChallenge };
+
+/** Manual actions: chat commands and the admin panel's buttons. */
+const LIFECYCLE_ACTIONS = {
+  async poll(env, chatId, config, tg, storage, type) {
+    const existing = await storage.getPoll(chatId, type);
+    if (existing) await retirePoll(tg, storage, chatId, type, existing);
+    await generatePoll(env, chatId, config, tg, storage, type);
+  },
+  async "cancel-poll"(env, chatId, config, tg, storage, type) {
+    const existing = await storage.getPoll(chatId, type);
+    if (existing) await retirePoll(tg, storage, chatId, type, existing);
+  },
+  start: (env, chatId, config, tg, storage, type) => startChallenge(env, chatId, config, tg, storage, type),
+  finish: finishChallenge,
+};
+
+/**
+ * Run a slot's action once per slot occurrence. The attempt is recorded before acting, so the
+ * same minute delivered twice runs it once; only success completes the slot, a failure retries.
+ */
+async function runSlot(env, tg, storage, chatId, config, state, type, action, occurrence, nowMs) {
+  const slotKey = `${action}:${type}`;
   const failKey = `${slotKey}!`;
-  const failed = state.slots[failKey];
-  const retrying = failed && failed.at === occurrence;
-  const lateBy = nowMs - occurrence;
+  const waitKey = `${slotKey}~`;
+  if (nowMs < occurrence || state.slots[slotKey] === occurrence) return;
 
-  if (retrying) {
-    if (lateBy > CRON_RETRY_MS) return false;                                // gave up on this cycle
-    if (nowMs - (failed.last ?? 0) < CRON_RETRY_INTERVAL_MS) return false;   // too soon to retry
+  const failed = state.slots[failKey]?.at === occurrence ? state.slots[failKey] : null;
+  const waiting = state.slots[waitKey]?.at === occurrence ? state.slots[waitKey] : null;
+  const due = waiting ? waiting.until : occurrence;
+  const lateBy = nowMs - due;
+  if (lateBy < 0) return;
+  if (failed) {
+    if (lateBy > CRON_RETRY_MS || nowMs - (failed.last ?? 0) < CRON_RETRY_INTERVAL_MS) return;
   } else if (lateBy > CRON_CATCHUP_MS) {
-    return false; // slot missed by too much and never attempted — skip to next cycle
+    return;
   }
 
-  if (state.bootstrap) {
-    // First tick after deploy: adopt whatever is already due instead of re-running
-    // it, otherwise a deploy shortly after a challenge start would restart it.
+  const done = () => {
     state.slots[slotKey] = occurrence;
+    delete state.slots[failKey];
+    delete state.slots[waitKey];
     state.dirty = true;
-    return false;
+  };
+  if (state.bootstrap) {
+    // First tick after a deploy adopts what is already due instead of re-running it.
+    done();
+    return;
   }
 
-  // Record the attempt BEFORE acting: the same minute can be delivered twice and
-  // must not run the action twice. Success promotes it to a completed slot below.
-  state.slots[failKey] = { at: occurrence, tries: (failed?.tries ?? 0) + 1, last: nowMs };
+  if (action === "challenge") {
+    const current = await storage.getChallenge(chatId, type);
+    if (current?.status === "active") {
+      // Started at or after this slot (a /run while the slot kept failing): it is this slot's challenge.
+      if (current.startedAt >= occurrence) {
+        done();
+        return;
+      }
+      // Extended in the admin panel: the next start waits for the announced end.
+      if (current.endsAt > nowMs) {
+        state.slots[waitKey] = { at: occurrence, until: current.endsAt };
+        state.dirty = true;
+        return;
+      }
+    }
+  } else {
+    const poll = await storage.getPoll(chatId, type);
+    // Posted at or after this slot (a /poll while the slot kept failing).
+    if (poll && poll.createdAt >= occurrence && poll.createdAt <= nowMs + 60_000) {
+      done();
+      return;
+    }
+  }
+
+  const tries = (failed ? failed.tries : 0) + 1;
+  state.slots[failKey] = { at: occurrence, tries, last: nowMs };
   state.dirty = true;
   await storage.setCronState(chatId, state.slots);
 
   if (lateBy > 90_000) {
-    console.warn(`cron: ${slotKey} for community=${chatId} ran ${Math.round(lateBy / 60000)}m late (попытка ${state.slots[failKey].tries})`);
+    console.warn(`cron: ${slotKey} for community=${chatId} ran ${Math.round(lateBy / 60000)}m late (попытка ${tries})`);
   }
 
-  const ok = await action();
-
-  if (ok !== false) {
-    state.slots[slotKey] = occurrence;
-    delete state.slots[failKey];
-  } else {
-    const tries = state.slots[failKey].tries;
-    const giveUp = lateBy + CRON_RETRY_INTERVAL_MS > CRON_RETRY_MS;
-    const what = SLOT_LABELS[slotKey] || slotKey;
-    const where = state.communityName ? `«${state.communityName}»` : `чат ${chatId}`;
-    await reportFailure(
-      env, tg, storage, slotKey,
-      giveUp
-        ? `Не удалось запустить ${what} — ${where}.
-Попыток: ${tries}, все неудачные. Цикл пропущен, нужна проверка.`
-        : `Не удалось запустить ${what} — ${where}.
-Попытка ${tries}, повтор через 10 минут.`,
-      { chatId, community: state.communityName, slot: slotKey, occurrence, tries },
-    );
+  let error = null;
+  try {
+    await SLOT_ACTIONS[action](env, chatId, config, tg, storage, type, nowMs);
+  } catch (e) {
+    error = e;
   }
-  state.dirty = true;
-  return ok !== false;
+  const what = SLOT_LABELS[slotKey];
+  const where = communityLabel(config, chatId);
+
+  if (!error) {
+    done();
+    try {
+      // Now, not at the end of the tick: an invocation that dies later must not run the slot again.
+      await storage.setCronState(chatId, state.slots);
+    } catch (e) {
+      console.error(`cron: could not record ${slotKey} as done:`, e.message);
+    }
+    if (failed) {
+      await logAlert(storage, "info", slotKey, `${what} — ${where}: запустился с попытки ${tries}`, { chatId, slot: slotKey, occurrence, tries });
+      await notifyOwner(env, tg, storage, `✅ Восстановилось: ${what} — ${where} запустился с попытки ${tries}.`);
+    }
+    return;
+  }
+
+  const reason = String(error.message || error).slice(0, 300);
+  const giveUp = lateBy + CRON_RETRY_INTERVAL_MS > CRON_RETRY_MS;
+  await reportFailure(
+    env, tg, storage, slotKey,
+    `Не удалось запустить ${what} — ${where}.\nПричина: ${reason}\n`
+      + (giveUp ? `Попыток: ${tries}, все неудачные. Цикл пропущен, нужна проверка.` : `Попытка ${tries}, повтор через 10 минут.`),
+    { chatId, community: config?.name ?? null, slot: slotKey, occurrence, tries, error: reason },
+  );
 }
 
-async function handleCronForCommunity(env, chatId, config, tg, storage, now, h, m, d, w, day, weekday) {
-  // Per-community schedule with full independence between poll, finish, run times.
-  // All time fields accept HOUR + optional MINUTE (defaults to 0).
-  //
-  // Schedule shape (all fields optional; legacy fields without *Minute use 0):
-  //   daily:   { pollHour, pollMinute, challengeHour, challengeMinute }
-  //   weekly:  { pollDay, pollHour, pollMinute, challengeDay, challengeHour, challengeMinute }
-  //   monthly: { pollDay, pollHour, pollMinute, challengeDay, challengeHour, challengeMinute }
-  //
-  // pollDay (weekly): 0=Sun..6=Sat; pollDay (monthly): 1..28
-  // For cron to actually pick up minute granularity, set the worker cron to `* * * * *`.
+async function handleCronForCommunity(env, chatId, config, tg, storage, now) {
   const schedule = await getSchedule(storage, chatId);
-
   const stored = await storage.getCronState(chatId);
-  const state = { slots: stored || {}, bootstrap: !stored, dirty: false, communityName: config?.name || null };
-
-  const slots = [
-    // ── Daily ──────────────────────────────────────────────────────────────
-    {
-      key: "poll:daily", kind: "daily",
-      at: {
-        hour: (typeof schedule.daily.pollHour === "number")
-          ? schedule.daily.pollHour
-          : (schedule.daily.challengeHour - 12 + 24) % 24,
-        minute: schedule.daily.pollMinute ?? 0,
-      },
-      run: () => generatePoll(env, chatId, config, tg, storage, "daily"),
-    },
-    {
-      key: "challenge:daily", kind: "daily",
-      at: { hour: schedule.daily.challengeHour, minute: schedule.daily.challengeMinute ?? 0 },
-      run: () => startChallenge(env, chatId, config, tg, storage, "daily"),
-    },
-    // ── Weekly ─────────────────────────────────────────────────────────────
-    {
-      key: "poll:weekly", kind: "weekly",
-      at: {
-        day: (typeof schedule.weekly.pollDay === "number")
-          ? schedule.weekly.pollDay
-          : (schedule.weekly.challengeDay + 6) % 7,
-        hour: schedule.weekly.pollHour,
-        minute: schedule.weekly.pollMinute ?? 0,
-      },
-      run: () => generatePoll(env, chatId, config, tg, storage, "weekly"),
-    },
-    {
-      key: "challenge:weekly", kind: "weekly",
-      at: {
-        day: schedule.weekly.challengeDay,
-        hour: schedule.weekly.challengeHour,
-        minute: schedule.weekly.challengeMinute ?? 0,
-      },
-      run: () => startChallenge(env, chatId, config, tg, storage, "weekly"),
-    },
-    // ── Monthly ────────────────────────────────────────────────────────────
-    {
-      key: "poll:monthly", kind: "monthly",
-      at: {
-        day: (typeof schedule.monthly.pollDay === "number")
-          ? schedule.monthly.pollDay
-          : (schedule.monthly.challengeDay === 1 ? 28 : schedule.monthly.challengeDay - 3),
-        hour: schedule.monthly.pollHour,
-        minute: schedule.monthly.pollMinute ?? 0,
-      },
-      run: () => generatePoll(env, chatId, config, tg, storage, "monthly"),
-    },
-    {
-      key: "challenge:monthly", kind: "monthly",
-      at: {
-        day: schedule.monthly.challengeDay,
-        hour: schedule.monthly.challengeHour,
-        minute: schedule.monthly.challengeMinute ?? 0,
-      },
-      run: () => startChallenge(env, chatId, config, tg, storage, "monthly"),
-    },
-  ];
-
+  const state = { slots: stored || {}, bootstrap: !stored, dirty: false };
   const nowMs = now.getTime();
 
-  for (const slot of slots) {
-    if (typeof slot.at.hour !== "number") continue;
-    const occurrence = lastSlotOccurrence(now, slot.kind, slot.at);
-    await runSlotOnce(env, tg, storage, chatId, state, slot.key, occurrence, nowMs, slot.run);
+  for (const type of CHALLENGE_TYPES) {
+    for (const action of ["poll", "challenge"]) {
+      const at = slotAt(schedule, type, action);
+      if (!Number.isInteger(at.hour)) continue;
+      await runSlot(env, tg, storage, chatId, config, state, type, action, lastSlotOccurrence(now, type, at), nowMs);
+    }
   }
 
-  // Always persist on the bootstrap tick, even with nothing due — otherwise the
-  // community stays in bootstrap mode and the next slot to come up gets adopted
-  // (i.e. silently skipped) instead of run.
+  // Persist even when nothing ran on the bootstrap tick, or the next due slot
+  // would be adopted (skipped) instead of run.
   if (state.dirty || state.bootstrap) await storage.setCronState(chatId, state.slots);
-
-  // day/weekday come from the cron expression and are no longer consulted —
-  // slots are resolved against real UTC time instead.
-  void weekday; void day; void w;
 }
 
-async function handleCron(env, tg, storage, cron, scheduledTime) {
+async function handleCron(env, tg, storage, scheduledTime) {
   try {
-    // Use the SCHEDULED fire time (UTC), not actual — Cloudflare fires the cron
-    // handler ~1 second BEFORE the scheduled minute (see Dashboard cron events:
-    // "21:48:59" for the tick scheduled at 21:49). If we use new Date() then
-    // getUTCMinutes() returns scheduledMinute-1 and matching against
-    // schedule.challengeMinute = 0 silently fails for whole-hour schedules
-    // (h gets decremented through midnight too). event.scheduledTime is the
-    // exact ms timestamp CF intended to fire and matches the cron expression.
     const now = scheduledTime ? new Date(scheduledTime) : new Date();
-    const m = now.getUTCMinutes();
-    const h = now.getUTCHours();
-    const d = now.getUTCDate();
-    const w = now.getUTCDay();
-    // Keep cron-string parsed bits for the legacy "*" detection on day/weekday
-    const parts = (cron || "").split(" ");
-    const day = parts[2] ?? "*";
-    const weekday = parts[4] ?? "*";
+    console.log(`Cron fired: ${now.toISOString()}`);
 
-    console.log(`Cron fired: expr=${cron} actual=${now.toISOString()} h=${h} m=${m} d=${d} w=${w}`);
-
-    // Get all active communities (returns array of config objects)
     const communityConfigs = await getAllActiveCommunities(env, storage);
-
     if (communityConfigs.length === 0) {
       console.log("Cron: no active communities");
       return;
     }
-
     console.log(`Cron: processing ${communityConfigs.length} communities`);
 
-    // Process each community - configs already contain chatId
     for (const config of communityConfigs) {
+      if (!config.chatId) continue;
       try {
-        const chatId = config.chatId;
-        if (!chatId) continue;
-
-        await handleCronForCommunity(env, chatId, config, tg, storage, now, h, m, d, w, day, weekday);
+        await handleCronForCommunity(env, config.chatId, config, tg, storage, now);
       } catch (e) {
-        console.error(`Cron error for community ${config.chatId}:`, {
-          error: e.message,
-          stack: e.stack,
-        });
+        console.error(`Cron error for community ${config.chatId}:`, { error: e.message, stack: e.stack });
       }
     }
   } catch (e) {
-    console.error("handleCron error:", {
-      error: e.message,
-      stack: e.stack,
-      cron,
-    });
+    console.error("handleCron error:", { error: e.message, stack: e.stack });
   }
 }
 
@@ -3508,423 +3459,142 @@ async function handleCron(env, tg, storage, cron, scheduledTime) {
 // MAIN HANDLER
 // ============================================
 
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+/** Admin HTTP endpoints require `Authorization: Bearer ADMIN_SECRET`; no secret configured = closed. */
+function isAuthorizedAdmin(request, env) {
+  return Boolean(env.ADMIN_SECRET) && request.headers.get("Authorization") === `Bearer ${env.ADMIN_SECRET}`;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Admin: delete a specific message (by chat_id + message_id)
-    // POST /admin/delete-message?chat_id=X&message_id=Y  (Bearer ADMIN_SECRET)
-    if (url.pathname === "/admin/delete-message" && request.method === "POST") {
-      const auth = request.headers.get("Authorization");
-      if (env.ADMIN_SECRET && auth !== `Bearer ${env.ADMIN_SECRET}`) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
-      }
-      const chatId = parseInt(url.searchParams.get("chat_id"), 10);
-      const messageId = parseInt(url.searchParams.get("message_id"), 10);
-      if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) {
-        return new Response(JSON.stringify({ error: "chat_id + message_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
-      }
-      try {
-        const tg = new TelegramAPI(env.BOT_TOKEN);
-        await tg.request("deleteMessage", { chat_id: chatId, message_id: messageId });
-        return new Response(JSON.stringify({ ok: true, chat_id: chatId, message_id: messageId }), { headers: { "Content-Type": "application/json" } });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 502, headers: { "Content-Type": "application/json" } });
-      }
-    }
-
-    // Admin: list recent updates (for finding leaked messages)
-    // GET /admin/recent-updates  (Bearer ADMIN_SECRET) → calls Telegram getUpdates
-    if (url.pathname === "/admin/recent-updates" && request.method === "GET") {
-      const auth = request.headers.get("Authorization");
-      if (env.ADMIN_SECRET && auth !== `Bearer ${env.ADMIN_SECRET}`) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
-      }
-      try {
-        const tg = new TelegramAPI(env.BOT_TOKEN);
-        // getUpdates is incompatible with webhooks — drop webhook first won't do, just call
-        // with allowed_updates=[] and timeout=0 to peek. May return empty if webhook is set.
-        const updates = await tg.request("getUpdates", { timeout: 0, limit: 100 });
-        return new Response(JSON.stringify({ count: updates.length, updates }, null, 2), { headers: { "Content-Type": "application/json" } });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), { status: 502, headers: { "Content-Type": "application/json" } });
-      }
-    }
-
-    // Health check
     if (url.pathname === "/" || url.pathname === "/health") {
-      return new Response(
-        JSON.stringify({
-          status: "ok",
-          bot: "TG Challenge Bot",
-          version: "2.4.0",
-        }),
-        {
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+      return jsonResponse({ status: "ok", bot: "TG Challenge Bot", version: "2.5.0" });
     }
 
-    // Setup webhook (protected with ADMIN_SECRET)
-    if (url.pathname === "/setup") {
-      try {
-        // Check authorization
-        const authHeader = request.headers.get("Authorization");
-        if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
-          return new Response(JSON.stringify({ error: "Unauthorized" }), {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        if (!env.BOT_TOKEN) {
-          return new Response(
-            JSON.stringify({ error: "BOT_TOKEN not configured" }),
-            {
-              status: 500,
-              headers: { "Content-Type": "application/json" },
-            },
-          );
-        }
-
-        const tg = new TelegramAPI(env.BOT_TOKEN);
-        const webhookUrl = `${url.origin}/webhook`;
-        await tg.setWebhook(webhookUrl, env.WEBHOOK_SECRET || null);
-
-        return new Response(
-          JSON.stringify({ success: true, webhook: webhookUrl }),
-          {
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      } catch (e) {
-        console.error("Setup error:", e);
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    // ============================================
-    // ADMIN ENDPOINTS (для тестирования)
-    // Формат: /admin/{action}/{type}?chat_id={chatId}
-    // ============================================
-
-    // POST /admin/poll/daily|weekly|monthly?chat_id=123 - создать опрос
-    if (url.pathname.startsWith("/admin/poll/") && request.method === "POST") {
-      const authHeader = request.headers.get("Authorization");
-      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const type = url.pathname.split("/").pop();
-      if (!["daily", "weekly", "monthly"].includes(type)) {
-        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const chatIdParam = url.searchParams.get("chat_id");
-      if (!chatIdParam) {
-        return new Response(JSON.stringify({ error: "Missing chat_id parameter" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const chatId = parseInt(chatIdParam, 10);
-
-      try {
-        const tg = new TelegramAPI(env.BOT_TOKEN);
-        const storage = new Storage(env.CHALLENGE_KV);
-        const config = await getConfigForChat(env, storage, chatId);
-
-        if (!config) {
-          return new Response(JSON.stringify({ error: "Community not registered" }), {
-            status: 404,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        // Delete existing poll if any
-        await storage.deletePoll(chatId, type);
-        await generatePoll(env, chatId, config, tg, storage, type);
-
-        return new Response(JSON.stringify({ success: true, action: "poll", type, chatId }), {
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    // POST /admin/start/daily|weekly|monthly?chat_id=123 - запустить челлендж
-    if (url.pathname.startsWith("/admin/start/") && request.method === "POST") {
-      const authHeader = request.headers.get("Authorization");
-      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const type = url.pathname.split("/").pop();
-      if (!["daily", "weekly", "monthly"].includes(type)) {
-        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const chatIdParam = url.searchParams.get("chat_id");
-      if (!chatIdParam) {
-        return new Response(JSON.stringify({ error: "Missing chat_id parameter" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const chatId = parseInt(chatIdParam, 10);
-
-      try {
-        const tg = new TelegramAPI(env.BOT_TOKEN);
-        const storage = new Storage(env.CHALLENGE_KV);
-        const config = await getConfigForChat(env, storage, chatId);
-
-        if (!config) {
-          return new Response(JSON.stringify({ error: "Community not registered" }), {
-            status: 404,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        await startChallenge(env, chatId, config, tg, storage, type);
-
-        return new Response(JSON.stringify({ success: true, action: "start", type, chatId }), {
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    // POST /admin/finish/daily|weekly|monthly?chat_id=123 - завершить челлендж
-    if (url.pathname.startsWith("/admin/finish/") && request.method === "POST") {
-      const authHeader = request.headers.get("Authorization");
-      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const type = url.pathname.split("/").pop();
-      if (!["daily", "weekly", "monthly"].includes(type)) {
-        return new Response(JSON.stringify({ error: "Invalid type. Use: daily, weekly, monthly" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const chatIdParam = url.searchParams.get("chat_id");
-      if (!chatIdParam) {
-        return new Response(JSON.stringify({ error: "Missing chat_id parameter" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const chatId = parseInt(chatIdParam, 10);
-
-      try {
-        const tg = new TelegramAPI(env.BOT_TOKEN);
-        const storage = new Storage(env.CHALLENGE_KV);
-        const config = await getConfigForChat(env, storage, chatId);
-
-        if (!config) {
-          return new Response(JSON.stringify({ error: "Community not registered" }), {
-            status: 404,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        await finishChallenge(env, chatId, config, tg, storage, type);
-
-        return new Response(JSON.stringify({ success: true, action: "finish", type, chatId }), {
-          headers: { "Content-Type": "application/json" },
-        });
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    // GET /admin/status?chat_id=123 - посмотреть текущее состояние сообщества
-    // GET /admin/status - список всех сообществ
-    if (url.pathname === "/admin/status") {
-      const authHeader = request.headers.get("Authorization");
-      if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
-        return new Response(JSON.stringify({ error: "Unauthorized" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const chatIdParam = url.searchParams.get("chat_id");
-
-      try {
-        const storage = new Storage(env.CHALLENGE_KV);
-
-        if (chatIdParam) {
-          // Status for specific community
-          const chatId = parseInt(chatIdParam, 10);
-          const [daily, weekly, monthly, pollDaily, pollWeekly, pollMonthly, activeTopics] = await Promise.all([
-            storage.getChallenge(chatId, "daily"),
-            storage.getChallenge(chatId, "weekly"),
-            storage.getChallenge(chatId, "monthly"),
-            storage.getPoll(chatId, "daily"),
-            storage.getPoll(chatId, "weekly"),
-            storage.getPoll(chatId, "monthly"),
-            storage.getActiveTopics(chatId),
-          ]);
-
-          return new Response(JSON.stringify({
-            chatId,
-            challenges: { daily, weekly, monthly },
-            polls: { daily: !!pollDaily, weekly: !!pollWeekly, monthly: !!pollMonthly },
-            activeTopics,
-          }, null, 2), {
-            headers: { "Content-Type": "application/json" },
-          });
-        } else {
-          // List all communities
-          const communities = await getAllActiveCommunities(env, storage);
-          const communitiesData = await getCommunities(storage);
-
-          return new Response(JSON.stringify({
-            totalCommunities: communities.length,
-            maxCommunities: MAX_COMMUNITIES,
-            communities: communitiesData,
-          }, null, 2), {
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    // Info (protected with ADMIN_SECRET) - list all communities
-    if (url.pathname === "/info") {
-      try {
-        const authHeader = request.headers.get("Authorization");
-        if (env.ADMIN_SECRET && authHeader !== `Bearer ${env.ADMIN_SECRET}`) {
-          return new Response(JSON.stringify({ error: "Unauthorized" }), {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-
-        const storage = new Storage(env.CHALLENGE_KV);
-        const communities = await getAllActiveCommunities(env, storage);
-        const communitiesData = await getCommunities(storage);
-
-        return new Response(
-          JSON.stringify({
-            configured: !!env.BOT_TOKEN,
-            version: "3.0.0-multi",
-            maxCommunities: MAX_COMMUNITIES,
-            totalCommunities: communities.length,
-            communities: communitiesData,
-            legacyChatId: env.CHAT_ID ? parseInt(env.CHAT_ID, 10) : null,
-          }),
-          { headers: { "Content-Type": "application/json" } },
-        );
-      } catch (e) {
-        console.error("Info error:", e);
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-    }
-
-    // Webhook
     if (url.pathname === "/webhook" && request.method === "POST") {
-      // Verify webhook secret if configured
-      if (env.WEBHOOK_SECRET) {
-        const secretHeader = request.headers.get(
-          "X-Telegram-Bot-Api-Secret-Token",
-        );
-        if (secretHeader !== env.WEBHOOK_SECRET) {
-          return new Response("Forbidden", { status: 403 });
-        }
+      if (env.WEBHOOK_SECRET && request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
+        return new Response("Forbidden", { status: 403 });
       }
-
       try {
         const update = await request.json();
 
-        // Webhook deduplication - prevent processing duplicate updates
+        // Telegram re-delivers an update it did not get a 200 for; process each once. The marker
+        // is bookkeeping only: when KV cannot store it, the update is still processed.
         if (update.update_id) {
           const dedupKey = `webhook:processed:${update.update_id}`;
-          const alreadyProcessed = await env.CHALLENGE_KV.get(dedupKey);
-          if (alreadyProcessed) {
-            console.log(`Skipping duplicate update ${update.update_id}`);
-            return new Response("OK");
+          try {
+            if (await env.CHALLENGE_KV.get(dedupKey)) {
+              console.log(`Skipping duplicate update ${update.update_id}`);
+              return new Response("OK");
+            }
+            await env.CHALLENGE_KV.put(dedupKey, "1", { expirationTtl: TTL.WEBHOOK_DEDUP });
+          } catch (e) {
+            console.error(`webhook dedup unavailable for ${update.update_id}:`, e.message);
           }
-          // Mark as processed (TTL: 1 hour)
-          await env.CHALLENGE_KV.put(dedupKey, "1", { expirationTtl: TTL.WEBHOOK_DEDUP });
         }
 
         const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
-
-        // Handlers determine community dynamically from update
+        await ensureWebhookConfig(env, tg);
         if (update.message) {
           await handleMessage(update, env, tg, storage);
         } else if (update.message_reaction) {
           await handleReaction(update, env, storage);
+        } else if (update.poll) {
+          await handlePollUpdate(update.poll, storage);
         }
       } catch (e) {
-        console.error("Webhook error:", {
-          error: e.message,
-          stack: e.stack,
-        });
+        console.error("Webhook error:", { error: e.message, stack: e.stack });
       }
-
       return new Response("OK");
     }
 
-    return new Response("Not found", { status: 404 });
+    if (url.pathname !== "/setup" && url.pathname !== "/info" && !url.pathname.startsWith("/admin/")) {
+      return new Response("Not found", { status: 404 });
+    }
+    if (!isAuthorizedAdmin(request, env)) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
+    try {
+      const storage = new Storage(env.CHALLENGE_KV);
+
+      if (url.pathname === "/setup") {
+        if (!env.BOT_TOKEN) return jsonResponse({ error: "BOT_TOKEN not configured" }, 500);
+        const webhookUrl = `${url.origin}/webhook`;
+        await new TelegramAPI(env.BOT_TOKEN).setWebhook(webhookUrl, env.WEBHOOK_SECRET || null);
+        return jsonResponse({ success: true, webhook: webhookUrl });
+      }
+
+      if (url.pathname === "/info" || (url.pathname === "/admin/status" && !url.searchParams.get("chat_id"))) {
+        const communities = await getAllActiveCommunities(env, storage);
+        return jsonResponse({
+          configured: !!env.BOT_TOKEN,
+          maxCommunities: MAX_COMMUNITIES,
+          totalCommunities: communities.length,
+          communities: await getCommunities(storage),
+          legacyChatId: env.CHAT_ID ? parseInt(env.CHAT_ID, 10) : null,
+        });
+      }
+
+      if (url.pathname === "/admin/status") {
+        const chatId = parseInt(url.searchParams.get("chat_id"), 10);
+        const [challenges, polls, activeTopics] = await Promise.all([
+          Promise.all(CHALLENGE_TYPES.map((t) => storage.getChallenge(chatId, t))),
+          Promise.all(CHALLENGE_TYPES.map((t) => storage.getPoll(chatId, t))),
+          storage.getActiveTopics(chatId),
+        ]);
+        return jsonResponse({
+          chatId,
+          challenges: Object.fromEntries(CHALLENGE_TYPES.map((t, i) => [t, challenges[i]])),
+          polls: Object.fromEntries(CHALLENGE_TYPES.map((t, i) => [t, !!polls[i]])),
+          activeTopics,
+        });
+      }
+
+      if (url.pathname === "/admin/delete-message" && request.method === "POST") {
+        const chatId = parseInt(url.searchParams.get("chat_id"), 10);
+        const messageId = parseInt(url.searchParams.get("message_id"), 10);
+        if (!Number.isFinite(chatId) || !Number.isFinite(messageId)) {
+          return jsonResponse({ error: "chat_id + message_id required" }, 400);
+        }
+        await new TelegramAPI(env.BOT_TOKEN).request("deleteMessage", { chat_id: chatId, message_id: messageId });
+        return jsonResponse({ ok: true, chat_id: chatId, message_id: messageId });
+      }
+
+      // POST /admin/{poll|cancel-poll|start|finish}/{daily|weekly|monthly}?chat_id=…
+      const lifecycle = url.pathname.match(/^\/admin\/(poll|cancel-poll|start|finish)\/(daily|weekly|monthly)$/);
+      if (lifecycle && request.method === "POST") {
+        const [, action, type] = lifecycle;
+        const chatId = parseInt(url.searchParams.get("chat_id"), 10);
+        if (!Number.isFinite(chatId)) return jsonResponse({ error: "Missing chat_id parameter" }, 400);
+        const config = await getConfigForChat(env, storage, chatId);
+        if (!config) return jsonResponse({ error: "Community not registered" }, 404);
+
+        try {
+          await LIFECYCLE_ACTIONS[action](env, chatId, config, new TelegramAPI(env.BOT_TOKEN), storage, type);
+        } catch (e) {
+          return jsonResponse({ success: false, action, type, chatId, error: e.message }, 500);
+        }
+        return jsonResponse({ success: true, action, type, chatId });
+      }
+
+      return new Response("Not found", { status: 404 });
+    } catch (e) {
+      console.error(`Admin endpoint error (${url.pathname}):`, { error: e.message, stack: e.stack });
+      return jsonResponse({ error: e.message }, 500);
+    }
   },
 
   async scheduled(event, env) {
-    // Heartbeat — пишется ВСЕГДА, даже до прочих проверок, чтобы видно было что cron реально срабатывает
-    try {
-      const cur = (await env.CHALLENGE_KV.get("cron:last_run", "json")) || { runs: [] };
-      cur.last = { ts: Date.now(), cron: event.cron, scheduledTime: event.scheduledTime };
-      cur.runs = [cur.last, ...(cur.runs || [])].slice(0, 20);
-      await env.CHALLENGE_KV.put("cron:last_run", JSON.stringify(cur), { expirationTtl: 7 * 24 * 3600 });
-    } catch (e) {
-      console.error("cron heartbeat write failed:", e.message);
-    }
-
     try {
       if (!env.BOT_TOKEN) {
         console.error("Scheduled job skipped: missing BOT_TOKEN");
@@ -3934,11 +3604,8 @@ export default {
       const tg = new TelegramAPI(env.BOT_TOKEN);
       const storage = new Storage(env.CHALLENGE_KV);
 
-      // handleCron iterates over all registered communities.
-      // Pass event.scheduledTime — actual `Date.now()` is HH:MM-1s drifted
-      // (CF cron fires ~1s before scheduled minute) which makes match against
-      // schedule.challengeMinute = 0 silently fail (h becomes HH-1, m becomes 59).
-      await handleCron(env, tg, storage, event.cron, event.scheduledTime);
+      // scheduledTime, not Date.now(): the tick can fire a second before its minute.
+      await handleCron(env, tg, storage, event.scheduledTime);
     } catch (e) {
       console.error("Scheduled job error:", {
         error: e.message,

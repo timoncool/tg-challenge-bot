@@ -22,7 +22,7 @@
 - ⭐ **Подсчёт реакций**: автоматический подсчёт (🌚 не учитывается)
 - 🏆 **Лидерборд**: рейтинг победителей (отдельный для каждой группы)
 - 🚫 **Анти-плагиат**: пересланные изображения не принимаются
-- 🧠 **Умный AI**: не повторяет темы (помнит последние 10)
+- 🧠 **Умный AI**: не повторяет темы (помнит последние 50)
 - 💡 **Предложение тем**: участники могут предлагать свои темы
 - 🎭 **Режимы контента**: vanilla / medium / nsfw
 - ☁️ **Serverless**: работает на Cloudflare Workers (бесплатно!)
@@ -89,13 +89,19 @@
 | Имя | Значение | Обязательно |
 |-----|----------|-------------|
 | `BOT_TOKEN` | Токен от BotFather | ✅ Да |
-| `GEMINI_API_KEY` | API-ключ Google AI Studio (Gemini) — провайдер AI по умолчанию | ✅ Да |
-| `ADMIN_SECRET` | Любой пароль для HTTP API | ✅ Да |
+| `AI_PROVIDER` | `gemini` (или `openrouter` / `openai`) | ✅ Да |
+| `AI_API_URL` | `https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent` — `{model}` бот подставит сам | ✅ Да |
+| `AI_API_KEY` | API-ключ Google AI Studio | ✅ Да |
+| `AI_MODEL` | Модель, например `gemini-2.5-flash` | ✅ Да |
+| `ADMIN_SECRET` | Любой пароль для HTTP API (без него `/setup` и `/admin/*` закрыты) | ✅ Да |
 | `WEBHOOK_SECRET` | Секрет для проверки webhook (любая строка) | ⬜ Нет |
+| `OWNER_CHAT_ID` | Ваш Telegram ID: бот пишет вам в личку о сбоях, а `/register_community` доступна только вам | ⬜ Нет |
 
 > 💡 Если ставишь админку — там в секции `TOKENS` можно сохранить OpenRouter ключ и через UI переключить движок на Claude / GPT / Llama / любую модель из 350+ без перезаливки воркера. См. [`admin/`](admin/).
 
 > 💡 `WEBHOOK_SECRET` повышает безопасность, проверяя что запросы приходят именно от Telegram.
+
+> 💡 Для личных сообщений о сбоях напишите боту `/start` в личке — иначе Telegram не даст ему написать первым.
 
 ### Шаг 6: Настройте расписание
 
@@ -104,8 +110,10 @@
 **Settings** → **Triggers** → **Cron Triggers**:
 
 ```
-0 * * * *     — каждый час (проверяет расписание всех групп)
+* * * * *     — каждую минуту (проверяет расписание всех групп)
 ```
+
+Время задаётся с точностью до минуты. Пропущенный тик бот догоняет в течение 55 минут, неудачный запуск сам повторяет каждые 10 минут до 6 часов.
 
 **Вариант B: Отложенные сообщения Telegram (проще!)**
 
@@ -120,24 +128,12 @@ Telegram будет автоматически отправлять команд
 
 ### Шаг 7: Активируйте webhook
 
-Откройте в браузере:
-
-```
-https://ваш-worker.workers.dev/setup
-```
-
-Или используйте curl:
-
-```bash
-curl https://ваш-worker.workers.dev/setup
-```
-
-Если установлен `ADMIN_SECRET`:
-
 ```bash
 curl -H "Authorization: Bearer ВАШ_ADMIN_SECRET" \
      https://ваш-worker.workers.dev/setup
 ```
+
+Без заголовка `/setup` отвечает 401. После обновления кода регистрация вебхука подтягивается сама при первом же сообщении.
 
 Ответ при успехе:
 ```json
@@ -181,6 +177,8 @@ curl -H "Authorization: Bearer ВАШ_ADMIN_SECRET" \
 | `/register_community` | Зарегистрировать группу |
 | `/list_communities` | Список всех групп бота |
 | `/unregister_community` | Удалить группу из бота |
+
+Если задан `OWNER_CHAT_ID`, эти команды выполняет только владелец бота, иначе — любой админ группы.
 
 ### Настройка топиков
 
@@ -270,8 +268,11 @@ curl -H "Authorization: Bearer ВАШ_ADMIN_SECRET" \
 | `GET` | `/admin/status` | Список всех сообществ |
 | `GET` | `/admin/status?chat_id=ID` | Статус конкретного сообщества |
 | `POST` | `/admin/poll/{type}?chat_id=ID` | Создать опрос (type: daily/weekly/monthly) |
+| `POST` | `/admin/cancel-poll/{type}?chat_id=ID` | Закрыть и снять открытый опрос |
 | `POST` | `/admin/start/{type}?chat_id=ID` | Запустить челлендж |
 | `POST` | `/admin/finish/{type}?chat_id=ID` | Завершить челлендж |
+
+Кроме `/` и `/health`. При ошибке ответ `500` с причиной в поле `error`.
 
 ### Примеры curl
 
@@ -333,9 +334,13 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
   "chatId": <CHAT_ID>,
   "challenges": {
     "daily": {
-      "theme": "Киберпанк-город",
-      "startedAt": "2025-01-15T10:00:00Z",
-      "participants": 12
+      "id": 20250115123,
+      "type": "daily",
+      "topic": "Киберпанк-город",
+      "status": "active",
+      "startedAt": 1736935200000,
+      "endsAt": 1737021600000,
+      "topicThreadId": 123
     },
     "weekly": null,
     "monthly": null
@@ -345,7 +350,7 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
     "weekly": true,
     "monthly": false
   },
-  "activeTopics": [123, 456]
+  "activeTopics": { "123": "daily" }
 }
 ```
 
@@ -355,7 +360,7 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
 
 ### Бот не отвечает
 1. Проверьте, что бот — администратор группы
-2. Проверьте webhook: откройте `/setup`
+2. Перерегистрируйте webhook: `/setup` с заголовком `Authorization: Bearer ADMIN_SECRET` (шаг 7)
 3. Проверьте логи в Cloudflare Dashboard → Workers → Logs
 
 ### Как добавить новую группу?
@@ -377,9 +382,9 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
 - `/schedule_monthly 1 17` — месячные: 1-го числа в 17:00
 
 ### Сколько это стоит?
-**$0** при обычном использовании:
+**$0** для небольших групп:
 - Cloudflare Workers: 100K запросов/день бесплатно
-- KV: 100K операций/день бесплатно
+- KV: 100K чтений и 1 000 записей в день бесплатно. Каждое сообщение и реакция в группе — запись, поэтому живым группам нужен Workers Paid ($5/мес)
 - Google AI: бесплатный tier достаточен
 
 ---
@@ -389,7 +394,9 @@ curl -H "Authorization: Bearer ВАШ_СЕКРЕТ" \
 | Файл | Описание |
 |------|----------|
 | `worker.js` | Чистый ванильный код — разверните и настройте под своё сообщество |
-| `worker-mr-challenger.js` | Пример кастомизации с персонажем и стилем |
+| `worker-mr-challenger.js` | Тот же бот с персонажем Mr. Challenger — основной файл, из него собирается `worker.js` |
+| `template/texts.js` | Нейтральные тексты для `worker.js` (`node scripts/build-template.mjs`) |
+| `tests/` | Регрессия: `node --test "tests/*.test.mjs"` |
 
 ---
 

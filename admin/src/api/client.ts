@@ -1,6 +1,9 @@
 // Thin fetch wrapper for /api/* endpoints served by Pages Functions.
 // Auth is via HttpOnly cookie set by /api/auth/login — we don't manage tokens here.
 
+/** Fired when the session cookie is no longer accepted; the auth provider shows the login page. */
+export const SESSION_EXPIRED_EVENT = "admin:session-expired";
+
 export class ApiError extends Error {
   constructor(public status: number, public body: unknown, message: string) {
     super(message);
@@ -34,6 +37,10 @@ async function request<T>(
     }
   } else {
     payload = await res.text();
+  }
+
+  if (res.status === 401 && !path.startsWith("/api/auth/")) {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
   }
 
   if (!res.ok) {

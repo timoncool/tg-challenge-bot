@@ -54,11 +54,19 @@ export const onRequestPut: PagesFunction<Env> = async (ctx) => {
   // String template fields
   for (const k of [
     "pollQuestion", "challengeAnnouncementTemplate", "winnerAnnouncementTemplate",
-    "winnerAnnouncementFullTemplate", "noSubmissions", "submissionLimitReached",
+    "winnerAnnouncementFullTemplate", "noSubmissions", "noVotes", "submissionLimitReached",
     "leaderboardTitle", "helpMessage",
   ] as const) {
     if (k in body && typeof (body as Record<string, unknown>)[k] !== "string") {
       return json({ error: `${k} must be string` }, { status: 400 });
+    }
+  }
+
+  // Telegram rejects an empty poll question or one over 300 characters, and then no poll is posted.
+  if ("pollQuestion" in body) {
+    const q = body.pollQuestion ?? "";
+    if (!q.trim() || q.length > 300) {
+      return json({ error: "pollQuestion: от 1 до 300 символов (лимит Telegram)" }, { status: 400 });
     }
   }
 

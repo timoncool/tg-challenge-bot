@@ -1,4 +1,5 @@
 import { Env, json } from "../../_lib/auth";
+import { SHARED_TOKENS_KEY, typedKey } from "../../_lib/aiKeys";
 import { DEFAULT_PROMPTS, PromptsConfig } from "../../_lib/defaultPrompts";
 
 const TYPE_NAMES: Record<string, string> = {
@@ -12,15 +13,23 @@ async function loadPrompts(kv: KVNamespace): Promise<PromptsConfig> {
   return stored ?? DEFAULT_PROMPTS;
 }
 
+// Same rendering as the bot's buildThemesPrompt: one pass over the template with a function
+// replacer, so placeholders inside edited text stay literal and `$&` patterns do not expand.
 function buildPrompt(p: PromptsConfig, mode: "vanilla" | "medium" | "nsfw", type: string, sampleSize = 20) {
   const modeCfg = p.modes[mode];
-  const sample = modeCfg.corpus.slice().sort(() => Math.random() - 0.5).slice(0, sampleSize);
-  return p.template
-    .replace(/\{TYPE\}/g, TYPE_NAMES[type] || "ДНЕВНОГО")
-    .replace(/\{MODE\}/g, mode.toUpperCase())
-    .replace(/\{INSTRUCTION\}/g, modeCfg.instruction)
-    .replace(/\{SAMPLE\}/g, sample.join(", "))
-    .replace(/\{HISTORY\}/g, "");
+  const a = modeCfg.corpus.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  const values: Record<string, string> = {
+    TYPE: TYPE_NAMES[type] || "ДНЕВНОГО",
+    MODE: mode.toUpperCase(),
+    INSTRUCTION: modeCfg.instruction,
+    SAMPLE: a.slice(0, sampleSize).join(", "),
+    HISTORY: "",
+  };
+  return p.template.replace(/\{(TYPE|MODE|INSTRUCTION|SAMPLE|HISTORY)\}/g, (_, key: string) => values[key]);
 }
 
 interface AiConfigInput {
@@ -29,9 +38,13 @@ interface AiConfigInput {
   apiKey: string;
   model: string;
   temperature?: number;
+  maxTokens?: number;
   referer?: string;
   title?: string;
 }
+
+// Must match the bot's AI_MAX_TOKENS so the test reproduces production.
+const AI_MAX_TOKENS = 5000;
 
 interface TestReq {
   config?: AiConfigInput;     // inline config
@@ -46,14 +59,16 @@ interface TestReq {
 }
 
 async function callAi(cfg: AiConfigInput, prompt: string): Promise<{ text: string; usage?: unknown; raw?: unknown }> {
+  // Stored Gemini URLs carry a {model} placeholder, as in the bot.
+  const url = cfg.apiUrl.replace(/\{model\}/gi, () => cfg.model);
   if (cfg.provider === "gemini") {
-    const r = await fetch(cfg.apiUrl, {
+    const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": cfg.apiKey },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
-          temperature: cfg.temperature ?? 0.95,
+          temperature: cfg.temperature ?? 1.0,
           responseMimeType: "application/json",
         },
         safetySettings: [
@@ -67,10 +82,13 @@ async function callAi(cfg: AiConfigInput, prompt: string): Promise<{ text: strin
     });
     if (!r.ok) throw new Error(`Gemini ${r.status}: ${(await r.text()).slice(0, 200)}`);
     const j = (await r.json()) as any;
-    const parts = j.candidates?.[0]?.content?.parts || [];
-    let text = "";
-    for (const p of parts) if (p.text && !p.thought) text = p.text;
-    return { text, raw: j };
+    const parts: { text?: string; thought?: boolean }[] = j.candidates?.[0]?.content?.parts || [];
+    const text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
+    const m = j.usageMetadata;
+    const usage = m
+      ? { prompt_tokens: m.promptTokenCount, completion_tokens: m.candidatesTokenCount, total_tokens: m.totalTokenCount }
+      : undefined;
+    return { text, usage, raw: j };
   }
 
   // OpenAI-compatible (openai / openrouter / custom)
@@ -91,9 +109,10 @@ async function callAi(cfg: AiConfigInput, prompt: string): Promise<{ text: strin
   };
   // Only forward temperature if explicitly set — many models reject it (GPT-5, o1, o3 etc.)
   if (typeof cfg.temperature === "number") reqBody.temperature = cfg.temperature;
+  reqBody.max_tokens = cfg.maxTokens ?? AI_MAX_TOKENS;
   // OpenRouter returns cost in usage only when explicitly asked
   if (cfg.provider === "openrouter") reqBody.usage = { include: true };
-  const r = await fetch(cfg.apiUrl, { method: "POST", headers, body: JSON.stringify(reqBody) });
+  const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(reqBody) });
   if (!r.ok) throw new Error(`${cfg.provider} ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j = (await r.json()) as any;
   let text = j.choices?.[0]?.message?.content || "";
@@ -139,19 +158,27 @@ async function logAiAttempt(kv: KVNamespace, entry: Record<string, unknown>) {
   }
 }
 
+// Same parsing as the bot: a JSON array (or an object holding one), non-empty strings, first 6.
 function parseThemes(text: string): string[] {
   if (!text) return [];
+  let parsed: unknown;
   try {
-    const p = JSON.parse(text);
-    return Array.isArray(p) ? p.slice(0, 6) : [];
+    parsed = JSON.parse(text);
   } catch {
     const m = text.match(/\[[\s\S]*\]/);
-    if (m) {
-      try { const p = JSON.parse(m[0]); return Array.isArray(p) ? p.slice(0, 6) : []; }
-      catch { return []; }
-    }
+    if (!m) return [];
+    try { parsed = JSON.parse(m[0]); } catch { return []; }
   }
-  return [];
+  const list = Array.isArray(parsed)
+    ? parsed
+    : (parsed && typeof parsed === "object" ? Object.values(parsed).find((v) => Array.isArray(v)) : null) || [];
+  return (list as unknown[])
+    .map((t) => (t && typeof t === "object"
+      ? (t as Record<string, unknown>).topic ?? (t as Record<string, unknown>).theme ?? (t as Record<string, unknown>).text ?? (t as Record<string, unknown>).content ?? ""
+      : t ?? ""))
+    .map((t) => String(t).trim())
+    .filter(Boolean)
+    .slice(0, 6);
 }
 
 export const onRequestPost: PagesFunction<Env> = async (ctx) => {
@@ -176,26 +203,25 @@ export const onRequestPost: PagesFunction<Env> = async (ctx) => {
   }
   if (!cfg) return json({ error: "Provide config, usePresetId or useGlobal" }, { status: 400 });
 
-  // Replace masked sentinel apiKey with stored value
-  //   1) preset's own apiKey
-  //   2) global config's apiKey
-  //   3) shared secrets:ai:tokens[provider] — общий токен
-  if (cfg.apiKey === "__UNCHANGED__" || !cfg.apiKey) {
+  // A config without a typed key (preset/global come masked to the page) uses, in order:
+  // the preset's own key, the global config's key, the provider's shared token.
+  if (!typedKey(cfg.apiKey)) {
+    cfg.apiKey = "";
     if (body.usePresetId) {
       const presets = (await ctx.env.CHALLENGE_KV.get<AiConfigInput[]>("settings:ai:presets", "json")) ?? [];
       const p = presets.find((x: any) => x.id === body.usePresetId);
       if (p?.apiKey) cfg.apiKey = p.apiKey;
     }
-    if (cfg.apiKey === "__UNCHANGED__" || !cfg.apiKey) {
+    if (!cfg.apiKey) {
       const stored = (await ctx.env.CHALLENGE_KV.get("settings:ai:global", "json")) as AiConfigInput | null;
-      if (stored?.apiKey) cfg.apiKey = stored.apiKey;
+      // Another provider's key would only produce a 401.
+      if (stored?.apiKey && stored.provider === cfg.provider) cfg.apiKey = stored.apiKey;
     }
-    if (cfg.apiKey === "__UNCHANGED__" || !cfg.apiKey) {
-      const shared = (await ctx.env.CHALLENGE_KV.get<{ openrouter?: string; gemini?: string }>("secrets:ai:tokens", "json")) ?? {};
-      const t = (shared as any)[cfg.provider];
-      if (t) cfg.apiKey = t;
+    if (!cfg.apiKey) {
+      const shared = (await ctx.env.CHALLENGE_KV.get<Record<string, string>>(SHARED_TOKENS_KEY, "json")) ?? {};
+      cfg.apiKey = shared[cfg.provider] ?? "";
     }
-    if (cfg.apiKey === "__UNCHANGED__" || !cfg.apiKey) {
+    if (!cfg.apiKey) {
       return json({ error: `apiKey не задан. Сохрани токен для ${cfg.provider} в секции TOKENS на /ai-engine` }, { status: 400 });
     }
   }
@@ -209,17 +235,20 @@ export const onRequestPost: PagesFunction<Env> = async (ctx) => {
   const modes = body.modes ?? ["vanilla", "medium", "nsfw"];
   const prompts = await loadPrompts(ctx.env.CHALLENGE_KV);
 
-  // Run all modes in parallel
+  // Modes run in parallel; their log entries are written afterwards, one by one,
+  // because logAiAttempt read-modify-writes the same KV keys.
+  const logEntries: Record<string, unknown>[] = [];
   const results = await Promise.all(
     modes.map(async (mode) => {
       const startedAt = Date.now();
       try {
         const prompt = buildPrompt(prompts, mode, type);
-        const { text, usage } = await callAi(cfg!, prompt);
+        const { text, usage, raw } = await callAi(cfg!, prompt);
         const themes = parseThemes(text);
         const durationMs = Date.now() - startedAt;
-        await logAiAttempt(ctx.env.CHALLENGE_KV, {
+        logEntries.push({
           provider: cfg!.provider, model: cfg!.model, source: "admin-test",
+          resolvedModel: (raw as any)?.model ?? (raw as any)?.modelVersion ?? null,
           type, contentMode: mode, durationMs,
           success: themes.length === 6, themesCount: themes.length,
           prompt_tokens: (usage as any)?.prompt_tokens ?? null,
@@ -238,7 +267,7 @@ export const onRequestPost: PagesFunction<Env> = async (ctx) => {
         };
       } catch (e) {
         const durationMs = Date.now() - startedAt;
-        await logAiAttempt(ctx.env.CHALLENGE_KV, {
+        logEntries.push({
           provider: cfg!.provider, model: cfg!.model, source: "admin-test",
           type, contentMode: mode, durationMs,
           success: false, error: String((e as Error).message || e).slice(0, 300),
@@ -256,9 +285,11 @@ export const onRequestPost: PagesFunction<Env> = async (ctx) => {
     })
   );
 
+  for (const entry of logEntries) await logAiAttempt(ctx.env.CHALLENGE_KV, entry);
+
   return json({
     ok: results.every((r) => r.ok),
-    config: { provider: cfg.provider, model: cfg.model, temperature: cfg.temperature ?? 0.95 },
+    config: { provider: cfg.provider, model: cfg.model, temperature: cfg.temperature ?? null },
     type,
     results,
   });

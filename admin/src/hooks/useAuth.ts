@@ -1,6 +1,6 @@
 import { createContext, createElement, useContext, useEffect, useState, useCallback } from "react";
 import type { ReactNode } from "react";
-import { api, ApiError } from "@/api/client";
+import { api, ApiError, SESSION_EXPIRED_EVENT } from "@/api/client";
 
 interface AuthState {
   loading: boolean;
@@ -27,18 +27,22 @@ function useAuthState(): AuthValue {
       await api.get<{ ok: true }>("/api/auth/me");
       setState({ loading: false, authenticated: true });
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        setState({ loading: false, authenticated: false });
-      } else {
-        // network/other — treat as unauthenticated so user can retry login
-        setState({ loading: false, authenticated: false });
-      }
+      // 401 or a network error: either way the login page lets the user retry.
+      if (!(e instanceof ApiError) || e.status !== 401) console.error("auth check failed:", e);
+      setState({ loading: false, authenticated: false });
     }
   }, []);
 
   useEffect(() => {
     void check();
   }, [check]);
+
+  // A session that expires while the panel is open sends the user back to the login page.
+  useEffect(() => {
+    const expire = () => setState({ loading: false, authenticated: false });
+    window.addEventListener(SESSION_EXPIRED_EVENT, expire);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, expire);
+  }, []);
 
   const login = useCallback(async (secret: string) => {
     await api.post<{ ok: true }>("/api/auth/login", { secret });

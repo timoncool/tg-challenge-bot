@@ -96,14 +96,14 @@ export function MessagesPage() {
             />
             <TemplateField
               title="Шаблон объявления победителя (в треде челленджа)"
-              hint="Плейсхолдеры: {username}, {score}, {phrase}"
+              hint="Плейсхолдеры: {username}, {score}, {votes} («5 голосов»), {phrase}"
               value={draft.winnerAnnouncementTemplate}
               onChange={(v) => setDraft({ ...draft, winnerAnnouncementTemplate: v })}
               onReset={() => resetField("winnerAnnouncementTemplate")}
             />
             <TemplateField
               title="Шаблон объявления победителя (в треде «Победители»)"
-              hint="Плейсхолдеры: {username}, {score}, {topic}, {phrase}"
+              hint="Плейсхолдеры: {username}, {score}, {votes}, {topic}, {phrase}"
               value={draft.winnerAnnouncementFullTemplate}
               onChange={(v) => setDraft({ ...draft, winnerAnnouncementFullTemplate: v })}
               onReset={() => resetField("winnerAnnouncementFullTemplate")}
@@ -140,7 +140,7 @@ export function MessagesPage() {
 
             <TemplateField
               title="Вопрос в poll"
-              hint="Заголовок голосования"
+              hint="Заголовок голосования, до 300 символов (лимит Telegram)"
               value={draft.pollQuestion}
               onChange={(v) => setDraft({ ...draft, pollQuestion: v })}
               onReset={() => resetField("pollQuestion")}
@@ -157,6 +157,14 @@ export function MessagesPage() {
               value={draft.noSubmissions}
               onChange={(v) => setDraft({ ...draft, noSubmissions: v })}
               onReset={() => resetField("noSubmissions")}
+              minRows={2}
+            />
+            <TemplateField
+              title="Работы есть, голосов нет"
+              hint="Шлётся при finish, если ни одна работа не набрала реакций — победителя нет"
+              value={draft.noVotes}
+              onChange={(v) => setDraft({ ...draft, noVotes: v })}
+              onReset={() => resetField("noVotes")}
               minRows={2}
             />
             <TemplateField
@@ -188,46 +196,44 @@ export function MessagesPage() {
       </Tabs>
 
       {/* Sticky bar */}
-      {(isDirty || true) && (
-        <Box style={{
-          position: "fixed",
-          bottom: 24,
-          left: "50%",
-          transform: "translateX(-50%)",
-          background: "rgba(15,15,22,0.92)",
-          backdropFilter: "blur(28px)",
-          border: "1px solid var(--border-bright)",
-          borderRadius: 12,
-          padding: "10px 14px",
-          display: "flex",
-          gap: 12,
-          alignItems: "center",
-          boxShadow: "0 24px 48px -12px rgba(0,0,0,0.6)",
-          zIndex: 50,
-        }}>
-          {isDirty && <span className="dot violet" />}
-          <Text size="13px">{isDirty ? "Есть несохранённые изменения" : "Всё сохранено"}</Text>
-          <Button
-            variant="default"
-            size="xs"
-            leftSection={<IconRestore size={12} />}
-            onClick={() => { if (confirm("Сбросить override — бот вернётся к дефолтам?")) resetM.mutate(); }}
-            loading={resetM.isPending}
-          >
-            Reset к дефолтам
-          </Button>
-          <Button
-            size="xs"
-            className="btn-primary"
-            leftSection={<IconCheck size={14} />}
-            loading={saveM.isPending}
-            disabled={!isDirty}
-            onClick={() => saveM.mutate(draft)}
-          >
-            Сохранить
-          </Button>
-        </Box>
-      )}
+      <Box style={{
+        position: "fixed",
+        bottom: 24,
+        left: "50%",
+        transform: "translateX(-50%)",
+        background: "rgba(15,15,22,0.92)",
+        backdropFilter: "blur(28px)",
+        border: "1px solid var(--border-bright)",
+        borderRadius: 12,
+        padding: "10px 14px",
+        display: "flex",
+        gap: 12,
+        alignItems: "center",
+        boxShadow: "0 24px 48px -12px rgba(0,0,0,0.6)",
+        zIndex: 50,
+      }}>
+        {isDirty && <span className="dot violet" />}
+        <Text size="13px">{isDirty ? "Есть несохранённые изменения" : "Всё сохранено"}</Text>
+        <Button
+          variant="default"
+          size="xs"
+          leftSection={<IconRestore size={12} />}
+          onClick={() => { if (confirm("Сбросить override — бот вернётся к дефолтам?")) resetM.mutate(); }}
+          loading={resetM.isPending}
+        >
+          Reset к дефолтам
+        </Button>
+        <Button
+          size="xs"
+          className="btn-primary"
+          leftSection={<IconCheck size={14} />}
+          loading={saveM.isPending}
+          disabled={!isDirty}
+          onClick={() => saveM.mutate(draft)}
+        >
+          Сохранить
+        </Button>
+      </Box>
     </Box>
   );
 }

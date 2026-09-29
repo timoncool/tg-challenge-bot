@@ -23,6 +23,8 @@ export class FakeKV {
     this.deleteCalls = [];
     /** Set a key name here to simulate a KV delete that silently does not stick. */
     this.swallowDeleteFor = null;
+    /** Set a key name here to make writes to it throw, like a KV 429/5xx. */
+    this.failPutFor = null;
   }
   async get(key, type) {
     const raw = this.map.get(key);
@@ -30,6 +32,7 @@ export class FakeKV {
     return type === "json" ? JSON.parse(raw) : raw;
   }
   async put(key, value) {
+    if (this.failPutFor === key) throw new Error(`KV put failed for ${key}`);
     this.map.set(key, value);
   }
   async delete(key) {
@@ -59,6 +62,10 @@ export class FakeKV {
  * Stub api.telegram.org.
  * opts.pollClosed → stopPoll fails the way Telegram fails for an already-closed poll.
  * opts.voterCounts → per-option vote counts for stopPoll.
+ * opts.adminIds → user ids getChatMember reports as administrators.
+ * opts.webhookInfo → what getWebhookInfo returns.
+ * opts.botUsername → the username getMe returns.
+ * opts.rejectSend → predicate on a sendMessage body; matching messages fail with 400.
  */
 export function stubTelegram(opts = {}) {
   const calls = [];
@@ -78,6 +85,11 @@ export function stubTelegram(opts = {}) {
         headers: { "Content-Type": "application/json" },
       });
 
+    if (method === "getWebhookInfo") return ok(opts.webhookInfo ?? { url: "" });
+    if (method === "getMe") return ok({ id: 1, is_bot: true, username: opts.botUsername ?? "challenge_test_bot" });
+    if (method === "sendMessage" && opts.rejectSend?.(body)) {
+      return fail(400, "Bad Request: can't parse entities: Unclosed start tag");
+    }
     if (method === "stopPoll") {
       if (opts.pollClosed) return fail(400, "Bad Request: poll has already been closed");
       return ok({
@@ -90,6 +102,10 @@ export function stubTelegram(opts = {}) {
       });
     }
     if (method === "sendPoll") return ok({ message_id: ++messageId, poll: { id: "poll-new" } });
+    if (method === "getChatMember") {
+      const admin = (opts.adminIds || []).includes(body.user_id);
+      return ok({ status: admin ? "administrator" : "member", user: { id: body.user_id } });
+    }
     if (method === "sendMessage" || method === "forwardMessage") return ok({ message_id: ++messageId });
     return ok(true);
   };
@@ -113,6 +129,30 @@ export function stubAi(themes) {
     }
     return inner(url, init);
   };
+}
+
+/**
+ * AI stub that records every request body. `content` overrides the answer text,
+ * `finishReason` and `model` shape the OpenAI-compatible envelope.
+ */
+export function captureAi(themes, { content, finishReason = "stop", model = "google/gemini-test" } = {}) {
+  const requests = [];
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (!String(url).includes("api.telegram.org")) {
+      requests.push(JSON.parse(init.body));
+      return new Response(
+        JSON.stringify({
+          model,
+          choices: [{ message: { content: content ?? JSON.stringify(themes) }, finish_reason: finishReason }],
+          usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return inner(url, init);
+  };
+  return requests;
 }
 
 /** AI stub that fails the way OpenRouter fails when credits run out. */
@@ -187,12 +227,37 @@ export function makeEnv(kv) {
     BOT_TOKEN: "test:token",
     ADMIN_SECRET: "secret",
     AI_PROVIDER: "openrouter",
+    AI_API_URL: "https://ai.test/v1/chat/completions",
     AI_API_KEY: "test-key",
     AI_MODEL: "test/model",
   };
 }
 
 export const ctx = { waitUntil: (p) => p, passThroughOnException: () => {} };
+
+/** Deliver a Telegram update to the webhook, as Telegram does. */
+export function sendUpdate(worker, env, update) {
+  return worker.fetch(
+    new Request("https://bot.test/webhook", { method: "POST", body: JSON.stringify(update) }),
+    env,
+  );
+}
+
+let updateId = 1000;
+/** A group message update from `from` in `thread`. */
+export function groupMessage({ text, from = { id: 42, username: "someone", first_name: "Someone" }, thread = 0, extra = {} }) {
+  return {
+    update_id: ++updateId,
+    message: {
+      message_id: 5000 + updateId,
+      chat: { id: CHAT, type: "supergroup", title: "TEST" },
+      from,
+      text,
+      message_thread_id: thread || undefined,
+      ...extra,
+    },
+  };
+}
 
 /**
  * Fire a cron tick the way Cloudflare does — scheduledTime carries seconds.

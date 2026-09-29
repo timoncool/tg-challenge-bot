@@ -1,9 +1,8 @@
 import { Env, json } from "../../_lib/auth";
+import { SHARED_TOKENS_KEY } from "../../_lib/aiKeys";
 
 // POST /api/ai/tokens-test  { provider: "openrouter" | "gemini", token?: string }
 // If token is omitted → uses the stored shared token for that provider.
-
-const KEY = "secrets:ai:tokens";
 
 export const onRequestPost: PagesFunction<Env> = async (ctx) => {
   let body: { provider?: string; token?: string };
@@ -16,7 +15,7 @@ export const onRequestPost: PagesFunction<Env> = async (ctx) => {
 
   let token = body.token ?? "";
   if (!token) {
-    const stored = (await ctx.env.CHALLENGE_KV.get<{ openrouter?: string; gemini?: string }>(KEY, "json")) ?? {};
+    const stored = (await ctx.env.CHALLENGE_KV.get<{ openrouter?: string; gemini?: string }>(SHARED_TOKENS_KEY, "json")) ?? {};
     token = stored[provider] ?? "";
   }
   if (!token) return json({ ok: false, error: "Нет токена для теста" }, { status: 400 });

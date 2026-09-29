@@ -1,12 +1,15 @@
 import { Env, json } from "../../_lib/auth";
+import { maskKey, SHARED_TOKENS_KEY } from "../../_lib/aiKeys";
 
-// Keys that contain secrets (AI api keys). GET returns them with apiKey masked.
+// Keys that contain secrets (AI api keys). GET returns them masked: `apiKey` fields in configs,
+// every string in the shared token store.
 const SENSITIVE_KEY_PATTERNS = [
   /^settings:ai:global$/,
   /^settings:ai:global:prev$/,
   /^settings:ai:presets$/,
   /^community:-?\d+:settings:ai$/,
 ];
+const SECRET_STORE_KEYS = new Set<string>([SHARED_TOKENS_KEY]);
 
 // Keys that are critical infra — DELETE requires explicit ?confirm=YES_I_KNOW
 const CRITICAL_DELETE_KEYS = new Set<string>([
@@ -15,28 +18,22 @@ const CRITICAL_DELETE_KEYS = new Set<string>([
   "settings:ai:presets",
   "settings:messages",
   "settings:ai:prompts",
-  "cron:last_run",
+  SHARED_TOKENS_KEY,
 ]);
 
 const SIZE_WARN = 200_000; // 200 KB — warn rather than parse blindly
 
 function isSensitive(key: string): boolean {
-  return SENSITIVE_KEY_PATTERNS.some((re) => re.test(key));
+  return SECRET_STORE_KEYS.has(key) || SENSITIVE_KEY_PATTERNS.some((re) => re.test(key));
 }
 
-function mask(s: string | undefined): string {
-  if (!s) return "";
-  if (s.length <= 8) return "•".repeat(s.length);
-  return s.slice(0, 4) + "•".repeat(Math.max(s.length - 8, 4)) + s.slice(-4);
-}
-
-function maskRecursive(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(maskRecursive);
+function maskRecursive(value: unknown, everyString: boolean): unknown {
+  if (Array.isArray(value)) return value.map((v) => maskRecursive(v, everyString));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (k === "apiKey" && typeof v === "string") out[k] = mask(v);
-      else out[k] = maskRecursive(v);
+      if (typeof v === "string" && (everyString || k === "apiKey")) out[k] = maskKey(v);
+      else out[k] = maskRecursive(v, everyString);
     }
     return out;
   }
@@ -62,7 +59,7 @@ export const onRequestGet: PagesFunction<Env> = async (ctx) => {
 
   try {
     const parsed = JSON.parse(raw);
-    const safe = isSensitive(key) ? maskRecursive(parsed) : parsed;
+    const safe = isSensitive(key) ? maskRecursive(parsed, SECRET_STORE_KEYS.has(key)) : parsed;
     return json({ key, value: safe, type: "json", sensitive: isSensitive(key), size: raw.length });
   } catch {
     return json({ key, value: raw, type: "text", sensitive: isSensitive(key), size: raw.length });

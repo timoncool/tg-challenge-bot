@@ -83,7 +83,7 @@ export function LoginPage() {
           Один секрет, <em style={{ color: "var(--accent)" }}>один доступ</em>.
         </Text>
         <Text c="dimmed" size="sm" mb="xl">
-          ADMIN_SECRET бота — он же ключ к этой админке. Сессия живёт 7 дней.
+          ADMIN_SECRET админки (переменная Pages-проекта). Сессия живёт 7 дней.
         </Text>
 
         {err && (

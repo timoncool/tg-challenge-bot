@@ -1,4 +1,5 @@
 import { Env, json } from "../../_lib/auth";
+import { maskKey, resolveApiKey } from "../../_lib/aiKeys";
 
 // AiConfig in KV: settings:ai:global (and per-community via settings:ai)
 interface AiConfig {
@@ -17,24 +18,21 @@ interface AiConfig {
   updatedAt: number;
 }
 
-const SENTINEL_UNCHANGED = "__UNCHANGED__";
-
-function mask(s: string | undefined): string {
-  if (!s) return "";
-  if (s.length <= 8) return "•".repeat(s.length);
-  return s.slice(0, 4) + "•".repeat(Math.max(s.length - 8, 4)) + s.slice(-4);
-}
+const PROVIDER_URL: Record<string, string> = {
+  openrouter: "https://openrouter.ai/api/v1/chat/completions",
+  gemini:     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+  openai:     "https://api.openai.com/v1/chat/completions",
+};
 
 function publish(cfg: AiConfig | null): (AiConfig & { apiKey: string }) | null {
   if (!cfg) return null;
-  return { ...cfg, apiKey: mask(cfg.apiKey) };
+  return { ...cfg, apiKey: maskKey(cfg.apiKey) };
 }
 
 export const onRequestGet: PagesFunction<Env> = async (ctx) => {
   const cfg = await ctx.env.CHALLENGE_KV.get<AiConfig>("settings:ai:global", "json");
 
-  // Fallback: read worker env legacy via separate hint (we can't read worker env here;
-  // we mark it as such if KV is empty).
+  // The worker's env config can't be read from here; an empty KV means the bot uses it.
   if (!cfg) {
     return json({
       source: "env-legacy",
@@ -57,32 +55,14 @@ export const onRequestPut: PagesFunction<Env> = async (ctx) => {
   if (!body.provider || !body.model) {
     return json({ error: "provider, model are required" }, { status: 400 });
   }
-  // apiUrl auto-default по provider если не задан явно
-  const PROVIDER_URL: Record<string, string> = {
-    openrouter: "https://openrouter.ai/api/v1/chat/completions",
-    gemini:     "https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
-    openai:     "https://api.openai.com/v1/chat/completions",
-  };
   const apiUrl = body.apiUrl || PROVIDER_URL[body.provider] || "";
   if (!apiUrl) return json({ error: "apiUrl не задан и нет default для provider " + body.provider }, { status: 400 });
 
-  // apiKey resolution order:
-  //   1. body.apiKey (если юзер явно вписал) — кроме SENTINEL
-  //   2. предыдущий config (SENTINEL → keep stored)
-  //   3. shared secrets:ai:tokens[provider] — общий токен для всех конфигов одного провайдера
-  let apiKey = body.apiKey ?? "";
-  if (apiKey === SENTINEL_UNCHANGED || !apiKey) {
-    const prev = await ctx.env.CHALLENGE_KV.get<AiConfig>("settings:ai:global", "json");
-    apiKey = prev?.apiKey ?? "";
-  }
-  if (!apiKey) {
-    const shared = (await ctx.env.CHALLENGE_KV.get<{ openrouter?: string; gemini?: string }>("secrets:ai:tokens", "json")) ?? {};
-    apiKey = (shared as any)[body.provider] ?? "";
-  }
+  const prev = await ctx.env.CHALLENGE_KV.get<AiConfig>("settings:ai:global", "json");
+  const apiKey = await resolveApiKey(ctx.env.CHALLENGE_KV, body.provider, body.apiKey, prev);
   if (!apiKey) return json({ error: `apiKey не задан. Сохрани токен для ${body.provider} в секции TOKENS на /ai-engine` }, { status: 400 });
 
-  // Preserve previous as :prev for rollback
-  const prev = await ctx.env.CHALLENGE_KV.get<AiConfig>("settings:ai:global", "json");
+  // Previous config kept as :prev for rollback.
   if (prev) {
     await ctx.env.CHALLENGE_KV.put("settings:ai:global:prev", JSON.stringify(prev));
   }
@@ -90,13 +70,13 @@ export const onRequestPut: PagesFunction<Env> = async (ctx) => {
   const now = Date.now();
   const next: AiConfig = {
     id: body.id ?? crypto.randomUUID(),
-    // Name всегда auto-генерится из provider/model — иначе старое имя «прилипает» при смене модели.
+    // Name always follows provider/model, or the old name sticks after a model change.
     name: `${body.provider}/${body.model}`,
     provider: body.provider,
     apiUrl,
     apiKey,
     model: body.model,
-    temperature: body.temperature, // undefined → не отправлять в запрос
+    temperature: body.temperature, // undefined → not sent to the model
     referer: body.referer,
     title: body.title,
     fallbacks: body.fallbacks,

@@ -35,7 +35,7 @@ export function AlertsPage() {
           crumb="CONTROL ROOM / 09 / ALERTS"
           title="Лог ошибок и предупреждений бота"
           emphasis="ошибок и предупреждений"
-          subtitle="Сюда бот будет писать после рефакторинга. Сейчас может быть пусто."
+          subtitle="Сбои опросов и стартов, зависшие опросы, восстановления. О каждом сбое бот пишет и владельцу в личку."
         />
         <Group gap="xs">
           <Button variant="default" size="xs" leftSection={<IconRefresh size={14} />} onClick={() => q.refetch()}>

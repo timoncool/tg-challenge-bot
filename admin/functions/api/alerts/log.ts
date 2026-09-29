@@ -1,7 +1,6 @@
 import { Env, json } from "../../_lib/auth";
 
-// GET /api/alerts/log  →  last 100 alerts written by bot to alerts:log
-// (Bot will start writing here after refactor; meanwhile may be empty.)
+// GET /api/alerts/log  →  last 100 alerts the bot wrote to alerts:log
 export const onRequestGet: PagesFunction<Env> = async (ctx) => {
   const log = (await ctx.env.CHALLENGE_KV.get<Array<{
     ts: number; severity: "error"|"warn"|"info"; component: string; message: string; context?: unknown;

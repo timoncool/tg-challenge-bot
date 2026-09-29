@@ -105,4 +105,4 @@ console.log(`   ✓ deployment configs updated`);
 console.log(`\n✅ Setup done.`);
 console.log(`   Production binds CHALLENGE_KV → ${prodKv} (real prod data)`);
 console.log(`   Preview    binds CHALLENGE_KV → ${testKv} (test data only)`);
-console.log(`\nNext: npm run pages:deploy`);
+console.log(`\nNext: npm run pages:deploy (needs CLOUDFLARE_API_TOKEN in the environment)`);

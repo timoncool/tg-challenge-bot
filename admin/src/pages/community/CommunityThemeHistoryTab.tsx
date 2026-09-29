@@ -53,7 +53,7 @@ export function CommunityThemeHistoryTab({ chatId }: { chatId: number }) {
 
       <Alert color="violet" variant="light" icon={<IconAlertTriangle size={14} />}>
         <Text size="sm">
-          Бот помнит последние 50-100 тем чтобы AI не повторял в опросах. Если AI стал генерить слабые темы — очистить историю.
+          Бот помнит последние 50 тем, чтобы AI не повторял их в опросах. Если AI стал генерить слабые темы — очистить историю.
         </Text>
       </Alert>
 
