@@ -74,6 +74,28 @@ test("an incomplete engine config fails with a readable reason, not a fetch erro
   assert.match(alert.message, /AI не настроен: нет apiUrl/);
 });
 
+test("repeated themes do not make Telegram reject the poll", async () => {
+  const worker = await loadWorker();
+  const kv = new FakeKV();
+  seedCommunity(kv);
+  const calls = stubTelegram({ options: POLL_OPTIONS });
+  const long = "Очень длинная тема ".repeat(8);
+  const inner = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("api.telegram.org")) return inner(url, init);
+    const themes = ["Маяк", "маяк", `${long}А`, `${long}Б`, "Сад", "Мост"];
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(themes) } }] }),
+      { headers: { "Content-Type": "application/json" } });
+  };
+
+  await tickAt(worker, makeEnv(kv), { hour: 5 });
+
+  const options = calls.find((c) => c.method === "sendPoll").body.options;
+  assert.equal(new Set(options.map((o) => o.toLowerCase())).size, options.length, `duplicates in ${JSON.stringify(options)}`);
+  assert.ok(options.every((o) => o.length <= 100));
+  assert.deepEqual(options.filter((o) => !o.startsWith("Очень")), ["Маяк", "Сад", "Мост"]);
+});
+
 test("placeholders inside the edited instruction or corpus are not expanded", async () => {
   const worker = await loadWorker();
   const kv = new FakeKV();

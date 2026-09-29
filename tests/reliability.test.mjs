@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 
 import {
   loadWorker, FakeKV, stubTelegram, stubAi, stubAiFailing, seedCommunity, seedPoll,
-  seedActiveChallenge, makeEnv, tickAt, sendUpdate, groupMessage, CHAT, POLL_OPTIONS,
+  seedActiveChallenge, makeEnv, tickAt, sendUpdate, groupMessage, derivedWebhookSecret, CHAT, POLL_OPTIONS,
 } from "./harness.mjs";
 
 const sixThemes = (prefix) => Array.from({ length: 6 }, (_, i) => `${prefix} ${i + 1}`);
@@ -225,6 +225,28 @@ test("an outdated webhook registration is brought up to date", async () => {
   assert.equal(set[0].body.secret_token, "hook");
 });
 
+test("an update without the secret is refused and the webhook is re-registered with one", async () => {
+  const worker = await loadWorker();
+  const kv = new FakeKV();
+  seedCommunity(kv);
+  const calls = stubTelegram({
+    webhookInfo: { url: "https://bot.test/webhook", allowed_updates: ["message", "message_reaction", "poll"], max_connections: 1 },
+    adminIds: [42],
+  });
+  const env = makeEnv(kv);
+
+  const res = await worker.fetch(new Request("https://bot.test/webhook", {
+    method: "POST",
+    body: JSON.stringify(groupMessage({ text: "/finish_daily", thread: 4 })),
+  }), env);
+
+  assert.equal(res.status, 403, "a forged update is not processed");
+  const set = sent(calls, "setWebhook");
+  assert.equal(set.length, 1);
+  assert.equal(set[0].body.secret_token, derivedWebhookSecret(env), "the secret is derived from BOT_TOKEN");
+  assert.equal(sent(calls, "getChatMember").length, 0, "no command was looked at");
+});
+
 test("an up-to-date webhook registration is left alone", async () => {
   const worker = await loadWorker();
   const kv = new FakeKV();
@@ -268,6 +290,33 @@ test("the closing update of a replaced poll does not overwrite the live counts",
   });
 
   assert.equal(kv.json(key("poll_votes", "daily")).total, 3);
+});
+
+// ── Submissions ───────────────────────────────────────────────────────────
+
+test("with links accepted, a link with the default preview counts as a work", async () => {
+  const worker = await loadWorker();
+  const kv = new FakeKV();
+  seedCommunity(kv);
+  kv.seed(key("settings", "accept_links"), true);
+  kv.seed(key("active_topics"), { 4: "daily" });
+  seedActiveChallenge(kv, { startedAt: Date.now() - 3600_000 });
+  const ch = kv.json(key("challenge", "daily"));
+  kv.seed(key("challenge", "daily"), { ...ch, endsAt: Date.now() + 3600_000 });
+  stubTelegram();
+
+  const link = "https://example.com/art";
+  const withPreview = groupMessage({ text: link, thread: 4, extra: { entities: [{ type: "url", offset: 0, length: link.length }] } });
+  const noPreview = groupMessage({
+    text: link, thread: 4, from: { id: 43, username: "other_user" },
+    extra: { entities: [{ type: "url", offset: 0, length: link.length }], link_preview_options: { is_disabled: true } },
+  });
+  await sendUpdate(worker, makeEnv(kv), withPreview);
+  await sendUpdate(worker, makeEnv(kv), noPreview);
+
+  const works = kv.json(key("submissions", "daily", ch.id));
+  assert.equal(works.length, 1);
+  assert.equal(works[0].messageId, withPreview.message.message_id);
 });
 
 // ── Commands ──────────────────────────────────────────────────────────────

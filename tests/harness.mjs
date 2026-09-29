@@ -2,6 +2,7 @@
 // handler against an in-memory KV and a stubbed Telegram API.
 // No dependencies — run with `node --test tests/`.
 
+import { createHash } from "node:crypto";
 import { copyFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -237,10 +238,19 @@ export function makeEnv(kv) {
 
 export const ctx = { waitUntil: (p) => p, passThroughOnException: () => {} };
 
-/** Deliver a Telegram update to the webhook, as Telegram does. */
+/** The secret the worker expects when WEBHOOK_SECRET is not set: derived from BOT_TOKEN. */
+export function derivedWebhookSecret(env) {
+  return env.WEBHOOK_SECRET || createHash("sha256").update(`${env.BOT_TOKEN}:webhook`).digest("hex");
+}
+
+/** Deliver a Telegram update to the webhook, as Telegram does — with the secret header. */
 export function sendUpdate(worker, env, update) {
   return worker.fetch(
-    new Request("https://bot.test/webhook", { method: "POST", body: JSON.stringify(update) }),
+    new Request("https://bot.test/webhook", {
+      method: "POST",
+      headers: { "X-Telegram-Bot-Api-Secret-Token": derivedWebhookSecret(env) },
+      body: JSON.stringify(update),
+    }),
     env,
   );
 }

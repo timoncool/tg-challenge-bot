@@ -526,16 +526,8 @@ class TelegramAPI {
     return this.sendMessage(chatId, text, { ...options, parse_mode: "HTML" });
   }
 
+  /** `options` are poll labels (see pollOptionLabel): plain text, unique, at most 100 characters. */
   async sendPoll(chatId, question, options, params = {}) {
-    // Strip HTML tags (polls don't support HTML) and truncate to 100 chars
-    options = options.map((opt) => {
-      const clean = stripHtml(opt);
-      if (clean.length > 100) {
-        return clean.substring(0, 97) + "...";
-      }
-      return clean;
-    });
-
     return this.request("sendPoll", {
       chat_id: chatId,
       question,
@@ -606,23 +598,40 @@ const WEBHOOK_ALLOWED_UPDATES = ["message", "message_reaction", "poll"];
 // suggestions), and parallel deliveries would overwrite each other's writes.
 const WEBHOOK_MAX_CONNECTIONS = 1;
 
-let webhookChecked = false;
+/**
+ * The secret Telegram sends with every update: WEBHOOK_SECRET, or one derived from BOT_TOKEN
+ * when it is not set — without a secret anyone who finds the URL can post updates "from" an admin.
+ */
+async function webhookSecret(env) {
+  if (env.WEBHOOK_SECRET) return env.WEBHOOK_SECRET;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${env.BOT_TOKEN}:webhook`));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
-/** A redeploy does not touch the webhook registration; bring it in line once per isolate. */
-async function ensureWebhookConfig(env, tg) {
-  if (webhookChecked) return;
-  webhookChecked = true;
+// Once per isolate each: the registration compared with the wanted config, and the
+// re-registration after an update that came without the secret.
+const webhookSync = { checked: false, resecured: false };
+
+/**
+ * A redeploy does not touch the webhook registration; bring it in line. `resecure` re-registers
+ * unconditionally: an update without the secret means the registration predates it, and Telegram
+ * redelivers the refused update with the header afterwards.
+ */
+async function ensureWebhookConfig(tg, secret, { resecure = false } = {}) {
+  const flag = resecure ? "resecured" : "checked";
+  if (webhookSync[flag]) return;
+  webhookSync[flag] = true;
   try {
     const info = await tg.getWebhookInfo();
     if (!info?.url) return;
     const allowed = info.allowed_updates || [];
     const upToDate = info.max_connections === WEBHOOK_MAX_CONNECTIONS
       && WEBHOOK_ALLOWED_UPDATES.every((u) => allowed.includes(u));
-    if (upToDate) return;
-    await tg.setWebhook(info.url, env.WEBHOOK_SECRET || null);
-    console.log("Webhook re-registered:", { allowed_updates: WEBHOOK_ALLOWED_UPDATES, max_connections: WEBHOOK_MAX_CONNECTIONS });
+    if (upToDate && !resecure) return;
+    await tg.setWebhook(info.url, secret);
+    console.log("Webhook re-registered:", { allowed_updates: WEBHOOK_ALLOWED_UPDATES, max_connections: WEBHOOK_MAX_CONNECTIONS, resecure });
   } catch (e) {
-    webhookChecked = false;
+    webhookSync[flag] = false;
     console.error("ensureWebhookConfig failed:", e.message);
   }
 }
@@ -1682,6 +1691,12 @@ function themesFromAnswer(parsed) {
     .filter(Boolean);
 }
 
+/** A theme as a poll option shows it: the short part, no HTML, at most 100 characters (Telegram's limit). */
+function pollOptionLabel(theme) {
+  const clean = stripHtml(parseTheme(theme).short).trim();
+  return clean.length > 100 ? `${clean.substring(0, 97)}...` : clean;
+}
+
 // Helper to parse theme format "Short | Full"
 function parseTheme(themeStr) {
   if (!themeStr || typeof themeStr !== "string") {
@@ -2539,9 +2554,10 @@ ${escapeHtml(themeText)}
     // Photo submission (includes photos, image documents, and links with previews)
     const hasPhoto = message.photo && message.photo.length > 0;
     const hasImageDocument = message.document?.mime_type?.startsWith("image/");
-    // Check for link with preview (OpenGraph images)
-    const hasLinkPreview = message.entities?.some(e => e.type === "url") &&
-                          (message.link_preview_options || message.web_page);
+    // A link with its preview shown. Telegram sends link_preview_options only when the author
+    // changed them, so its absence means the default preview, not "no preview".
+    const hasLinkPreview = message.entities?.some((e) => e.type === "url" || e.type === "text_link") &&
+                          !message.link_preview_options?.is_disabled;
 
     // The community setting is read only for messages it can affect, not for every chat line.
     const isValidSubmission = hasPhoto || hasImageDocument || (hasLinkPreview && await storage.getAcceptLinks(chatId));
@@ -2945,6 +2961,7 @@ async function deleteMessageLogged(tg, chatId, messageId, what) {
 async function generatePoll(env, chatId, config, tg, storage, type) {
   let sent = null;
   let pollOptions;
+  let historyThemes;
   let suggestions;
   let aiCount = 0;
   try {
@@ -2977,10 +2994,18 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
       aiThemes = (await generateThemesLogged(aiConfig, type, previousThemes, contentMode, env.CHALLENGE_KV, chatId))
         .slice(0, aiSlots);
     }
-    // Stored options keep the full "short | full" strings; the poll shows the short part.
-    const allThemes = [...suggestionThemes, ...aiThemes];
+    // Stored options keep the full "short | full" strings; the poll shows their labels, which
+    // must be unique — Telegram rejects a poll with two equal options.
+    const seen = new Set();
+    const allThemes = [...suggestionThemes, ...aiThemes].filter((t) => {
+      const label = pollOptionLabel(t).toLowerCase();
+      if (!label || seen.has(label)) return false;
+      seen.add(label);
+      return true;
+    });
     aiCount = aiThemes.length;
-    pollOptions = allThemes.map((t) => parseTheme(t).short);
+    pollOptions = allThemes.map(pollOptionLabel);
+    historyThemes = allThemes.map((t) => parseTheme(t).short);
     if (pollOptions.length < 2) {
       throw new Error(`для опроса нужно минимум 2 темы, есть ${pollOptions.length}`);
     }
@@ -3021,7 +3046,7 @@ async function generatePoll(env, chatId, config, tg, storage, type) {
       updatedAt: Date.now(),
     });
     // Every option goes to history so future polls do not repeat it.
-    await storage.addThemesToHistory(chatId, type, pollOptions);
+    await storage.addThemesToHistory(chatId, type, historyThemes);
     // All suggestions are cleared, not only the used ones: the next cycle starts fresh.
     await storage.clearSuggestions(chatId, type);
   } catch (e) {
@@ -3048,11 +3073,7 @@ async function takePollWinner(tg, storage, chatId, type, poll) {
       }
     }
     if (winnerText) {
-      // Options were shown without HTML and possibly cut to 100 chars with "...".
-      const full = poll.options.find((o) => {
-        const short = stripHtml(parseTheme(o).short);
-        return short === winnerText || (winnerText.endsWith("...") && short.startsWith(winnerText.slice(0, -3)));
-      });
+      const full = poll.options.find((o) => pollOptionLabel(o) === winnerText);
       theme = full ? { short: parseTheme(full).short, full } : { short: winnerText, full: winnerText };
     } else if (poll.options?.length) {
       const pick = poll.options[Math.floor(Math.random() * poll.options.length)];
@@ -3486,7 +3507,10 @@ export default {
     }
 
     if (url.pathname === "/webhook" && request.method === "POST") {
-      if (env.WEBHOOK_SECRET && request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.WEBHOOK_SECRET) {
+      const tg = new TelegramAPI(env.BOT_TOKEN);
+      const secret = await webhookSecret(env);
+      if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== secret) {
+        await ensureWebhookConfig(tg, secret, { resecure: true });
         return new Response("Forbidden", { status: 403 });
       }
       try {
@@ -3507,9 +3531,8 @@ export default {
           }
         }
 
-        const tg = new TelegramAPI(env.BOT_TOKEN);
         const storage = new Storage(env.CHALLENGE_KV);
-        await ensureWebhookConfig(env, tg);
+        await ensureWebhookConfig(tg, secret);
         if (update.message) {
           await handleMessage(update, env, tg, storage);
         } else if (update.message_reaction) {
@@ -3536,7 +3559,7 @@ export default {
       if (url.pathname === "/setup") {
         if (!env.BOT_TOKEN) return jsonResponse({ error: "BOT_TOKEN not configured" }, 500);
         const webhookUrl = `${url.origin}/webhook`;
-        await new TelegramAPI(env.BOT_TOKEN).setWebhook(webhookUrl, env.WEBHOOK_SECRET || null);
+        await new TelegramAPI(env.BOT_TOKEN).setWebhook(webhookUrl, await webhookSecret(env));
         return jsonResponse({ success: true, webhook: webhookUrl });
       }
 
